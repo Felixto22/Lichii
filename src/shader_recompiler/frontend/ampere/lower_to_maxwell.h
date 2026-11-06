@@ -50,6 +50,15 @@ struct LoweredProgram {
 // Lower only operations whose semantics are representable by the existing
 // Maxwell frontend. These are new instructions, not reinterpretations of the
 // native bytes. Scheduling/control words are added by the environment adapter.
+// Debug switches for the gather lowerings added for Zelda: Ocarina of Time (on unless the variable
+// is "0"): EDEN_NX2_GATHER_BINDLESS (second descriptor buffer TLD4 as TLD4.B) and
+// EDEN_NX2_GATHER_RUNTIME_PTP (unproven per-tap offsets as registers). Off restores the old
+// rejection, to tell whether either one is behind a regression.
+inline bool GatherLoweringEnabled(const char* name) {
+    const char* value = std::getenv(name);
+    return !value || value[0] != '0';
+}
+
 inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 high_uniforms,
                                         LoweringOptions options = {}) {
     const bool geometry_stage = options.geometry, compact_matrix = options.tensor;
@@ -2542,6 +2551,9 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
             // handle, loaded from that buffer, as its first meta register.
             const bool second_buffer = !bindless && result.required_texture_buffer != ~0U &&
                                        result.required_texture_buffer != binding;
+            static const bool bindless_gathers = GatherLoweringEnabled("EDEN_NX2_GATHER_BINDLESS");
+            if (second_buffer && !bindless_gathers)
+                return fail(index, "native texture gather mode");
             // Meta registers: R246 the handle (second buffer), then offsets, then the reference.
             // The per-tap pair sits at R248 for TLD4 (R246/R247 are the FP16 repack scratch),
             // right after the handle for TLD4.B.
@@ -2654,6 +2666,9 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
                     }
                     return true;
                 }();
+                static const bool runtime_offsets = GatherLoweringEnabled("EDEN_NX2_GATHER_RUNTIME_PTP");
+                if (!proven && !runtime_offsets)
+                    return fail(index, "native per-tap gather control-flow proof");
                 for (u32 i = 0; i < 2; ++i) {
                     if (proven)
                         emit(0x010000000007f000ULL | (ptp_base + i) | (u64{*packed_offsets[i]} << 20));
