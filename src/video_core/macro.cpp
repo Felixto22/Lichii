@@ -34,6 +34,7 @@
 #include "video_core/rasterizer_interface.h"
 #include "video_core/macro.h"
 #include "video_core/query_dma.h"
+#include "common/nx2_switch.h"
 
 #include "common/assert.h"
 #include "common/bit_field.h"
@@ -1445,7 +1446,8 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                         VideoCommon::QueryDma::Trace(memory, maxwell3d.Rasterizer(), method, address,
                                                      source, read_bytes);
                     }
-                    if (!VideoCommon::GpuSplit::Get().Active()) {
+                    static const bool query_flush = Common::Nx2Switch("EDEN_NX2_QUERY_DMA_FLUSH");
+                    if (query_flush && !VideoCommon::GpuSplit::Get().Active()) {
                         memory.FlushRegion(source, read_bytes, VideoCommon::CacheType::QueryCache);
                     }
                     if (memory.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {

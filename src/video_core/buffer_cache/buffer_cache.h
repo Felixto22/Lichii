@@ -18,6 +18,7 @@
 #include <fmt/ranges.h>
 
 #include "common/range_sets.inc"
+#include "common/nx2_switch.h"
 #include "video_core/buffer_cache/buffer_cache_base.h"
 #include "video_core/buffer_cache/multi_range_refresh.h"
 #include "video_core/buffer_cache/uniform_stream_reuse.h"
@@ -1356,7 +1357,9 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
     // Native programs keep tables next to their code in a 64 KiB bank read with indirect offsets
     // (Splatoon Raiders: the dialogue box corners in c1). Writes to that memory can go unnoticed by
     // the memory tracker, leaving stale host contents, so upload such a bank again once per frame.
-    if (has_host_buffer && (*channel_state->uniform_buffer_sizes)[stage][index] == 0x10000 &&
+    static const bool bank_reupload = Common::Nx2Switch("EDEN_NX2_UNIFORM_BANK");
+    if (bank_reupload && has_host_buffer &&
+        (*channel_state->uniform_buffer_sizes)[stage][index] == 0x10000 &&
         size != 0 && gpu_memory != nullptr && gpu_memory->UsesNativeTiling() &&
         (Nx2Perf::Verify() || !native_indirect_uniforms_this_frame.contains(device_addr)) &&
         !memory_tracker.IsRegionGpuModified(device_addr, size) &&
@@ -2936,7 +2939,8 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
             // it (Ocarina of Time's grass instances lie 12-18 MiB past theirs): bound to the end of
             // its mapping, up to 64 MiB. The 8 MiB cap made those reads return 0 and culled every
             // blade. Written pools keep the cap: a write marks the whole binding GPU-modified.
-            if (table_pointer && !is_written) {
+            static const bool pool_64 = Common::Nx2Switch("EDEN_NX2_POOL_64MB");
+            if (pool_64 && table_pointer && !is_written) {
                 return (std::min)(memory_layout_size, static_cast<u32>(64_MiB));
             }
             // A native (Switch 2) compute program's pointer is bare: the word after it is another

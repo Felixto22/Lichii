@@ -18,6 +18,7 @@
 #include <boost/container/small_vector.hpp>
 
 #include "common/alignment.h"
+#include "common/nx2_switch.h"
 #include "shader_recompiler/environment.h"
 #include "shader_recompiler/frontend/ir/basic_block.h"
 #include "shader_recompiler/frontend/ir/breadth_first_search.h"
@@ -1114,7 +1115,7 @@ small_vector<StorageBufferAddr, 4> NativePointerCandidates(const IR::U32& low_ad
         case IR::Opcode::GetCbufU32x2: {
             const IR::Value index{inst->Arg(0)};
             const IR::Value offset{inst->Arg(1)};
-            if (index.IsImmediate() && !offset.IsImmediate()) {
+            if (Common::Nx2Switch("EDEN_NX2_PTR_DYNAMIC") && index.IsImmediate() && !offset.IsImmediate()) {
                 static constexpr u32 max_slots{16};
                 small_vector<std::pair<u32, u32>, 4> slots;
                 std::unordered_set<const IR::Inst*> slot_visited;
@@ -1155,6 +1156,9 @@ small_vector<StorageBufferAddr, 4> NativePointerCandidates(const IR::U32& low_ad
             enqueue(inst->Arg(2));
             break;
         case IR::Opcode::ShuffleIndex:
+            if (!Common::Nx2Switch("EDEN_NX2_PTR_SHUFFLE")) {
+                break;
+            }
             // A pointer made uniform (R2UR broadcasts the first active lane's value).
             enqueue(inst->Arg(0));
             break;
@@ -1164,6 +1168,9 @@ small_vector<StorageBufferAddr, 4> NativePointerCandidates(const IR::U32& low_ad
             }
             break;
         case IR::Opcode::LoadGlobal64: {
+            if (!Common::Nx2Switch("EDEN_NX2_PTR_LOADED")) {
+                break;
+            }
             // A pointer loaded from the memory a constant buffer pointer points to (the binding
             // reads it again for every dispatch and draw).
             // The table address: a tracked low word, or a constant buffer pointer packed whole.
@@ -1577,7 +1584,8 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
         }
     };
     collect();
-    if (info.tables_seen && info.set.size() < Info::MAX_SSBOS) {
+    static const bool tables = Common::Nx2Switch("EDEN_NX2_PTR_TABLES");
+    if (tables && info.tables_seen && info.set.size() < Info::MAX_SSBOS) {
         // Again with pointer table entries, in the bindings the first pass left free.
         StorageInfo with_tables;
         with_tables.iterator_words = std::move(info.iterator_words);

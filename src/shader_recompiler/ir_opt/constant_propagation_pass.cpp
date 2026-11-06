@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <bit>
 #include <numeric>
+#include "common/nx2_switch.h"
 #include "shader_recompiler/environment.h"
 #include "shader_recompiler/exception.h"
 #include "shader_recompiler/frontend/ir/ir_emitter.h"
@@ -375,7 +376,8 @@ void FoldAdd(IR::Block& block, IR::Inst& inst) {
         return;
     }
     if constexpr (std::is_same_v<T, u32>) {
-        if (FoldHalvesRecombine(inst)) {
+        static const bool fold_mul01 = Common::Nx2Switch("EDEN_NX2_FOLD_MUL01");
+        if (fold_mul01 && FoldHalvesRecombine(inst)) {
             return;
         }
         if (FoldXmadMultiply(block, inst)) {
@@ -1048,6 +1050,13 @@ void ConstantPropagation(Environment& env, IR::Block& block, IR::Inst& inst) {
     case IR::Opcode::SMax32:
         return FoldSMax32(block, inst);
     case IR::Opcode::IMul32:
+        {
+            static const bool fold_mul01 = Common::Nx2Switch("EDEN_NX2_FOLD_MUL01");
+            if (!fold_mul01) {
+                FoldWhenAllImmediates(inst, [](u32 a, u32 b) { return a * b; });
+                return;
+            }
+        }
         return FoldIMul32(inst);
     case IR::Opcode::ShiftRightArithmetic32:
         FoldWhenAllImmediates(inst, [](s32 a, s32 b) { return static_cast<u32>(a >> b); });
