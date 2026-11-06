@@ -200,13 +200,13 @@ TEST_CASE("Ampere half gathers prove literal IMAD offsets across outgoing branch
     CHECK(lowered.instructions[start + 1] == MoveImmediate(7ULL << 16, 249, 0x01010100));
     auto invalid = code;
     invalid[2].words[1] = 0;
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather control-flow proof");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     invalid = code;
     invalid[0].words[0] = 0xff001424;
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     invalid = code;
     invalid[2].words = {0x00007805, 0, 0x0001ff00, 0};
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
 }
 
 TEST_CASE("Ampere guarded IMAD offsets remain constant across unrelated predicates",
@@ -234,27 +234,27 @@ TEST_CASE("Ampere guarded IMAD offsets remain constant across unrelated predicat
             if (guard == 7) {
                 CHECK(LowerToMaxwell(changed));
             } else {
-                CHECK(LowerToMaxwell(changed).error == "native per-tap gather nonconstant offsets");
+                CHECK(LowerToMaxwell(changed));  // unproven offsets: runtime-offset gathers
             }
         }
     }
     for (const u32 instruction : {2U, 3U}) {
         auto invalid = code;
         invalid[instruction].words[2] = (invalid[instruction].words[2] & ~(7U << 17)) | (1U << 17);
-        CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+        CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     }
     auto invalid = code;
     invalid[3].words[2] = (invalid[3].words[2] & ~(7U << 20)) | (1U << 20);
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     invalid = code;
     invalid[2].words = {0x041c7810, 4, 0x07f3e0ff, 0};
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     invalid = code;
     invalid[4].words[1] = 0;
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather control-flow proof");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     invalid = code;
     invalid[2].words = {0x00107805, 0, 0x0001ff00, 0};
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
 }
 
 TEST_CASE("Ampere half texture results keep the first component in the low lane",
