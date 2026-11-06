@@ -631,7 +631,7 @@ Id EmitImageSampleDrefExplicitLod(EmitContext& ctx, IR::Inst* inst, const IR::Va
 // Per-tap (PTP) gather whose offsets are not compile-time constants. SPIR-V's ConstOffsets
 // needs constants, so emulate it: four gathers, each with one runtime Offset
 // (shaderImageGatherExtended), keeping the w texel ((i0, j0), the one the offset addresses).
-[[nodiscard]] bool IsRuntimePtp(const IR::Value& offset, const IR::Value& offset2) {
+[[nodiscard]] static bool IsRuntimePtp(const IR::Value& offset, const IR::Value& offset2) {
     if (offset2.IsEmpty() || offset.IsEmpty()) {
         return false;
     }
@@ -643,7 +643,7 @@ Id EmitImageSampleDrefExplicitLod(EmitContext& ctx, IR::Inst* inst, const IR::Va
 }
 
 template <typename GatherFn>
-Id EmitRuntimePtpGather(EmitContext& ctx, IR::Inst* inst, bool is_integer, Id result_type,
+static Id EmitRuntimePtpGather(EmitContext& ctx, IR::Inst* inst, bool is_integer, Id result_type,
                         const IR::Value& offset, const IR::Value& offset2, GatherFn&& gather) {
     const Id scalar_type{is_integer ? ctx.U32[1] : ctx.F32[1]};
     const std::array<Id, 2> packed{ctx.Def(offset), ctx.Def(offset2)};
