@@ -1634,6 +1634,13 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
         for (const StorageBufferAddr& storage_buffer : info.set) {
             loaded += storage_buffer.indirect != ~0U ? 1 : 0;
         }
+        // The buffers behind loaded pointers overlap (pool entries of one table) and the program
+        // shares data across invocations through them. Without Coherent members and uniform
+        // memory barriers, AMD's compiler caches reads that other invocations wrote: Ocarina of
+        // Time's culling programs read stale counts and hung the GPU. EDEN_NX2_PTR_COHERENT=0 off.
+        if (loaded != 0 && Common::Nx2Switch("EDEN_NX2_PTR_COHERENT")) {
+            program.info.requires_coherent_global_memory = true;
+        }
         if (loaded != 0) {
             LOG_INFO(Shader, "Loaded pointer bindings: {} {} in program {:016x}", loaded,
                      env.ShaderStage() == Stage::Compute ? "compute" : "graphics",
