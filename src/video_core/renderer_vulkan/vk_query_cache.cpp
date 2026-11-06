@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <cstddef>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <memory>
@@ -261,6 +262,18 @@ public:
         size_t resolve_buffer_index = ObtainBuffer<true>(num_slots_used);
         resolve_buffers.push_back(resolve_buffer_index);
         size_t base_offset = 0;
+        // AMD's driver waits for each query in turn when a copy asks for VK_QUERY_RESULT_WAIT_BIT:
+        // Ocarina of Time's 13 copies a frame took 33 ms of GPU time on an RX 9070 XT, for about
+        // 1 ms of draws. Wait for the queries' draws once with a barrier, and copy without it.
+        // EDEN_NX2_QUERY_NOWAIT=0 keeps the wait bit, =1 drops it on every driver.
+        static const bool copy_nowait = [driver_id] {
+            const char* value = std::getenv("EDEN_NX2_QUERY_NOWAIT");
+            if (value != nullptr) {
+                return value[0] != '0';
+            }
+            return driver_id == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                   driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE || driver_id == VK_DRIVER_ID_MESA_RADV;
+        }();
 
         ApplyBanksWideOp<true>(pending_sync, [&](SamplesQueryBank* bank, size_t start,
                                                  size_t amount) {
@@ -268,7 +281,7 @@ public:
             auto& resolve_buffer = buffers[resolve_buffer_index];
             VkQueryPool query_pool = bank->GetInnerPool();
             scheduler.RequestOutsideRenderPassOperationContext();
-            scheduler.Record([start, amount, base_offset, query_pool,
+            scheduler.Record([start, amount, base_offset, query_pool, nowait = copy_nowait,
                               buffer = *resolve_buffer](vk::CommandBuffer cmdbuf) {
                 const VkBufferMemoryBarrier copy_query_pool_barrier{
                     .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
@@ -282,10 +295,15 @@ public:
                     .size = amount * SamplesQueryBank::QUERY_SIZE,
                 };
 
+                if (nowait) {
+                    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0);
+                }
                 cmdbuf.CopyQueryPoolResults(
                     query_pool, static_cast<u32>(start), static_cast<u32>(amount), buffer,
                     static_cast<u32>(base_offset), SamplesQueryBank::QUERY_SIZE,
-                    VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT);
+                    nowait ? VK_QUERY_RESULT_64_BIT
+                           : VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT);
                 cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
                                        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, copy_query_pool_barrier);
             });
