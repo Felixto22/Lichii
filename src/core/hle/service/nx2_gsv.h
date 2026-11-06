@@ -1793,7 +1793,27 @@ private:
         m_previous_fence_id = ~w[22];
         m_previous_fence_value = w[24];
         const auto waited = std::chrono::steady_clock::now();
+        // Every slot is reported free at once, and the composite of a present runs on the GPU
+        // thread once its fence passes, later than this reply. Running a frame ahead, Ocarina drew
+        // the next frames into an image whose composite hadn't run yet: shown half redrawn, the
+        // HUD (drawn last) blinked. Wait for the previous present's composite (=2: this one's too;
+        // EDEN_NX2_PRESENT_WAIT_COMPOSITE=0 turns it off).
+        static const int composite_wait = [] {
+            const char* value = std::getenv("EDEN_NX2_PRESENT_WAIT_COMPOSITE");
+            return value != nullptr && value[0] >= '0' && value[0] <= '2' ? value[0] - '0' : 1;
+        }();
+        if (composite_wait >= 1 && m_last_composite != 0) {
+            system.GPU().WaitForCompositeDone(m_last_composite, std::chrono::milliseconds{50});
+        }
+        if (m_presents <= 40) {
+            LOG_INFO(Service, "nx2:vi2 present #{} slot={} image={} fence=({}, {:#x})", m_presents,
+                     w[4], w[5], ~w[22], w[24]);
+        }
         Composite(w[5], ~w[22], w[24], w[7]);
+        m_last_composite = system.GPU().LastCompositeRequest();
+        if (composite_wait >= 2 && m_last_composite != 0) {
+            system.GPU().WaitForCompositeDone(m_last_composite, std::chrono::milliseconds{50});
+        }
         const auto composited = std::chrono::steady_clock::now();
         PaceToVblank(w[12], ctx.GetThread().GetOwnerProcess());
         const auto paced = std::chrono::steady_clock::now();
@@ -1876,6 +1896,7 @@ private:
         u32 presents{}, ran_ahead{};
         std::chrono::steady_clock::time_point last_present{};
     } m_stats{};
+    u64 m_last_composite{}; // GPU::LastCompositeRequest after the previous present
     u32 m_previous_fence_id{~0U}; // none yet (WaitForFrame ignores ids >= 192)
     u32 m_previous_fence_value{};
 

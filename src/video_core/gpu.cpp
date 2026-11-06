@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <condition_variable>
 #include <list>
 #include <memory>
@@ -274,7 +275,27 @@ struct GPU::Impl {
         gpu_thread.FlushAndInvalidateRegion(addr, size, is_async);
     }
 
+    void NoteCompositeDone(u64 sequence) {
+        {
+            std::scoped_lock lk{composite_done_mutex};
+            composite_done = (std::max)(composite_done, sequence);
+        }
+        composite_done_cv.notify_all();
+    }
+
+    u64 LastCompositeRequest() const {
+        return composite_requested.load(std::memory_order_acquire);
+    }
+
+    bool WaitForCompositeDone(u64 sequence, std::chrono::microseconds timeout) {
+        std::unique_lock lk{composite_done_mutex};
+        return composite_done_cv.wait_for(lk, timeout, [&] {
+            return composite_done >= sequence || shutting_down.load(std::memory_order_relaxed);
+        });
+    }
+
     void RequestComposite(std::vector<Tegra::FramebufferConfig>&& layers, std::vector<Service::Nvidia::NvFence>&& fences) {
+        const u64 sequence = composite_requested.fetch_add(1, std::memory_order_acq_rel) + 1;
         const size_t num_fences{fences.size()};
         size_t current_request_counter{};
         if (num_fences != 0) {
@@ -289,14 +310,15 @@ struct GPU::Impl {
             }
         }
         pending_composite_fence = RequestSyncOperation(
-            [this, current_request_counter, num_fences, composite_layers = std::move(layers),
-             composite_fences = std::move(fences)] {
+            [this, sequence, current_request_counter, num_fences,
+             composite_layers = std::move(layers), composite_fences = std::move(fences)] {
                 if (num_fences == 0) {
                     renderer->Composite(composite_layers);
+                    NoteCompositeDone(sequence);
                     return;
                 }
                 auto& syncpoint_manager = system.Host1x().GetSyncpointManager();
-                const auto executer = [this, current_request_counter, composite_layers]() {
+                const auto executer = [this, sequence, current_request_counter, composite_layers]() {
                     {
                         std::unique_lock<std::mutex> lk(request_swap_mutex);
                         if (--request_swap_counters[current_request_counter] != 0) {
@@ -305,6 +327,7 @@ struct GPU::Impl {
                         free_swap_counters.push_back(current_request_counter);
                     }
                     renderer->Composite(composite_layers);
+                    NoteCompositeDone(sequence);
                 };
                 for (size_t i = 0; i < num_fences; i++) {
                     syncpoint_manager.RegisterGuestAction(composite_fences[i].id,
@@ -382,6 +405,10 @@ struct GPU::Impl {
     std::deque<size_t> request_swap_counters;
     std::mutex request_swap_mutex;
     u64 pending_composite_fence{};
+    std::atomic<u64> composite_requested{};
+    std::mutex composite_done_mutex;
+    std::condition_variable composite_done_cv;
+    u64 composite_done{};
 };
 
 GPU::GPU(Core::System& system, bool is_async, bool use_nvdec)
@@ -514,6 +541,14 @@ void GPU::RequestComposite(std::vector<Tegra::FramebufferConfig>&& layers,
 
 void GPU::WaitForComposite() {
     impl->WaitForComposite();
+}
+
+u64 GPU::LastCompositeRequest() const {
+    return impl->LastCompositeRequest();
+}
+
+bool GPU::WaitForCompositeDone(u64 sequence, std::chrono::microseconds timeout) {
+    return impl->WaitForCompositeDone(sequence, timeout);
 }
 
 std::vector<u8> GPU::GetAppletCaptureBuffer() {

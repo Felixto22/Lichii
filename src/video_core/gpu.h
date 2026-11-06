@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <memory>
 
@@ -230,6 +231,11 @@ public:
                           std::vector<Service::Nvidia::NvFence>&& fences);
 
     void WaitForComposite();
+
+    /// The sequence number of the last RequestComposite (0 before the first).
+    [[nodiscard]] u64 LastCompositeRequest() const;
+    /// Waits until the composite with that sequence number ran on the renderer, or the timeout.
+    bool WaitForCompositeDone(u64 sequence, std::chrono::microseconds timeout);
 
     std::vector<u8> GetAppletCaptureBuffer();
 
