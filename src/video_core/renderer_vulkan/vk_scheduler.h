@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <thread>
+#include <typeinfo>
 #include <utility>
 #include <queue>
 #include <source_location>
@@ -315,6 +316,9 @@ private:
 
         virtual void Execute(vk::CommandBuffer cmdbuf, vk::CommandBuffer upload_cmdbuf) const = 0;
 
+        /// The recorded lambda's type name, which names the function that recorded it.
+        virtual const char* Name() const = 0;
+
         Command* GetNext() const {
             return next;
         }
@@ -341,13 +345,18 @@ private:
             command(cmdbuf, upload_cmdbuf);
         }
 
+        const char* Name() const override {
+            return typeid(T).name();
+        }
+
     private:
         T command;
     };
 
     class CommandChunk final {
     public:
-        void ExecuteAll(vk::CommandBuffer cmdbuf, vk::CommandBuffer upload_cmdbuf);
+        void ExecuteAll(vk::CommandBuffer cmdbuf, vk::CommandBuffer upload_cmdbuf,
+                        Scheduler* tracer = nullptr);
 
         template <typename T>
         bool Record(T& command) {
@@ -470,6 +479,15 @@ private:
         std::array<u32, 3> size{};
     };
     vk::QueryPool trace_work_pool;
+    /// EDEN_DKB_CMD_TRACE=1 (with EDEN_DKB_FRAME_TRACE=1): times every recorded command of a
+    /// sampled frame, grouped by the function that recorded it.
+    static constexpr u32 TraceMaxCommands = 16384;
+    vk::QueryPool trace_cmd_pool;
+    std::vector<const char*> trace_cmd_names;
+    u32 trace_cmd_count{};
+    void TraceCommand(vk::CommandBuffer cmdbuf, const Command& command,
+                      vk::CommandBuffer upload_cmdbuf);
+    void ReportCommandTimes();
     std::vector<WorkTrace> trace_work_items;
     u32 trace_work_count{};
     Common::DkbFrameTrace::RateLimit trace_gpu_rate;

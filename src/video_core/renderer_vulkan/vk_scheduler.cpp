@@ -12,6 +12,7 @@
 #include <string_view>
 #include <string>
 #include <map>
+#include <regex>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -94,11 +95,15 @@ void ReportSubmitCounts() {
 }
 
 void Scheduler::CommandChunk::ExecuteAll(vk::CommandBuffer cmdbuf,
-                                         vk::CommandBuffer upload_cmdbuf) {
+                                         vk::CommandBuffer upload_cmdbuf, Scheduler* tracer) {
     auto command = first;
     while (command != nullptr) {
         auto next = command->GetNext();
-        command->Execute(cmdbuf, upload_cmdbuf);
+        if (tracer != nullptr && tracer->trace_cmd_pool && tracer->trace_gpu_recording) {
+            tracer->TraceCommand(cmdbuf, *command, upload_cmdbuf);
+        } else {
+            command->Execute(cmdbuf, upload_cmdbuf);
+        }
         command->~Command();
         command = next;
     }
@@ -138,6 +143,18 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
                     .pipelineStatistics = 0,
                 });
                 trace_work_items.resize(TraceMaxWork);
+                if (const char* cmd_trace = std::getenv("EDEN_DKB_CMD_TRACE");
+                    cmd_trace != nullptr && cmd_trace[0] == '1') {
+                    trace_cmd_pool = device.GetLogical().CreateQueryPool({
+                        .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                        .pNext = nullptr,
+                        .flags = 0,
+                        .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                        .queryCount = TraceMaxCommands * 2,
+                        .pipelineStatistics = 0,
+                    });
+                    trace_cmd_names.resize(TraceMaxCommands);
+                }
             } catch (const vk::Exception& error) {
                 LOG_WARNING(Render_Vulkan, "DKB gpu_timestamp unavailable: {}", error.what());
             }
@@ -527,7 +544,7 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
             // Perform the work, tracking whether the chunk was a submission
             // before executing.
             const bool has_submit = work->HasSubmit();
-            work->ExecuteAll(current_cmdbuf, current_upload_cmdbuf);
+            work->ExecuteAll(current_cmdbuf, current_upload_cmdbuf, this);
 
             // If the chunk was a submission, reallocate the command buffer.
             if (has_submit) {
@@ -742,6 +759,7 @@ void Scheduler::TraceGpuSubmission() {
                      work.dispatch_attempts, shaders, work.untracked_uses);
         }
         ReportWorkTimes();
+        ReportCommandTimes();
         trace_gpu_tick = 0;
         trace_gpu_count = 0;
         trace_gpu_skipped = 0;
@@ -755,6 +773,9 @@ void Scheduler::TraceGpuSubmission() {
     if (trace_gpu_count == 0 && trace_work_pool) {
         // Draws are timed inside render passes, where queries cannot be reset.
         current_upload_cmdbuf.ResetQueryPool(*trace_work_pool, 0, TraceMaxWork * 2);
+        if (trace_cmd_pool) {
+            current_upload_cmdbuf.ResetQueryPool(*trace_cmd_pool, 0, TraceMaxCommands * 2);
+        }
     }
     current_upload_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *trace_query_pool,
                                         trace_gpu_count * 2);
@@ -949,6 +970,103 @@ void Scheduler::AcquireNewChunk() {
         chunk = std::move(chunk_reserve.back());
         chunk_reserve.pop_back();
     }
+}
+
+} // namespace Vulkan
+
+namespace Vulkan {
+
+void Scheduler::TraceCommand(vk::CommandBuffer cmdbuf, const Command& command,
+                             vk::CommandBuffer upload_cmdbuf) {
+    if (trace_cmd_count == TraceMaxCommands) {
+        command.Execute(cmdbuf, upload_cmdbuf);
+        return;
+    }
+    const u32 query = trace_cmd_count * 2;
+    trace_cmd_names[trace_cmd_count++] = command.Name();
+    cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_cmd_pool, query);
+    command.Execute(cmdbuf, upload_cmdbuf);
+    // A submission ends the command buffer: its end stays unavailable and is skipped.
+    if (trace_gpu_recording) {
+        cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_cmd_pool, query + 1);
+    }
+}
+
+namespace {
+std::string ShortCommandName(const char* name) {
+    static const std::regex function{R"((\w+)::(\w+)\s*[(<])"};
+    const std::string text{name};
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), function);
+         it != std::sregex_iterator(); ++it) {
+        const std::string owner = (*it)[1].str();
+        const std::string method = (*it)[2].str();
+        if (owner == "Scheduler" && method.starts_with("Record")) {
+            continue;
+        }
+        if (owner == "std" || owner == "Vulkan" || owner == "VideoCommon") {
+            continue;
+        }
+        std::string label = owner + "::" + method;
+        const auto lambda = text.find("<lambda", static_cast<size_t>(it->position()));
+        if (lambda != std::string::npos) {
+            const auto end = text.find('>', lambda);
+            label += text.substr(lambda + 7, end == std::string::npos ? 0 : end - lambda - 7);
+        }
+        return label;
+    }
+    return text.substr(0, 100);
+}
+} // Anonymous namespace
+
+void Scheduler::ReportCommandTimes() {
+    const u32 count = trace_cmd_count;
+    trace_cmd_count = 0;
+    if (count == 0 || !trace_cmd_pool) {
+        return;
+    }
+    struct Result {
+        u64 timestamp;
+        u64 available;
+    };
+    std::vector<Result> results(count * 2);
+    const auto result = device.GetLogical().GetQueryResults(
+        *trace_cmd_pool, 0, count * 2, results.size() * sizeof(Result), results.data(),
+        sizeof(Result), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    if (result != VK_SUCCESS && result != VK_NOT_READY) {
+        return;
+    }
+    std::map<std::string, std::pair<double, u32>> by_name;
+    std::map<const char*, std::string> short_names;
+    double total_ms{};
+    for (u32 i = 0; i < count; ++i) {
+        if (results[i * 2].available == 0 || results[i * 2 + 1].available == 0) {
+            continue;
+        }
+        const double ms = static_cast<double>(Common::DkbFrameTrace::TimestampDelta(
+                              results[i * 2].timestamp, results[i * 2 + 1].timestamp,
+                              trace_timestamp_bits)) *
+                          trace_timestamp_period / 1e6;
+        auto [it, inserted] = short_names.try_emplace(trace_cmd_names[i]);
+        if (inserted) {
+            it->second = ShortCommandName(trace_cmd_names[i]);
+        }
+        auto& entry = by_name[it->second];
+        entry.first += ms;
+        ++entry.second;
+        total_ms += ms;
+    }
+    std::vector<std::pair<std::string, std::pair<double, u32>>> sorted(by_name.begin(),
+                                                                       by_name.end());
+    std::ranges::sort(sorted, std::greater<>{}, [](const auto& entry) { return entry.second.first; });
+    if (sorted.size() > 14) {
+        sorted.resize(14);
+    }
+    std::string slowest;
+    for (const auto& [name, totals] : sorted) {
+        slowest += fmt::format(" [{}={:.3f}ms/{}x]", name, totals.first, totals.second);
+    }
+    LOG_INFO(Render_Vulkan, "DKB gpu_cmds renderer_frame={} commands={} timed_sum_ms={:.3f}{}",
+             trace_sample_frame, count, total_ms, slowest);
 }
 
 } // namespace Vulkan
