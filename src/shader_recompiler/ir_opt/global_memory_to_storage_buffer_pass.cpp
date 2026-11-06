@@ -1171,6 +1171,10 @@ small_vector<StorageBufferAddr, 4> NativePointerCandidates(const IR::U32& low_ad
             if (!Common::Nx2Switch("EDEN_NX2_PTR_LOADED")) {
                 break;
             }
+            if (!Common::Nx2Switch(env.ShaderStage() == Stage::Compute ? "EDEN_NX2_PTR_LOADED_CS"
+                                                                       : "EDEN_NX2_PTR_LOADED_GFX")) {
+                break;
+            }
             // A pointer loaded from the memory a constant buffer pointer points to (the binding
             // reads it again for every dispatch and draw).
             // The table address: a tracked low word, or a constant buffer pointer packed whole.
