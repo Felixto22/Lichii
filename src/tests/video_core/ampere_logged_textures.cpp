@@ -360,7 +360,8 @@ TEST_CASE("Ampere half per-tap gathers round and pack each pair in low-high orde
 
 TEST_CASE("Logged half textures retain unsupported-mode rejections",
           "[video_core][ampere][logged_textures]") {
-    for (const u32 bit : {76U, 77U, 78U, 80U, 91U}) {
+    // Bit 77 alone makes a valid half per-tap gather: its offsets now pass through as registers.
+    for (const u32 bit : {76U, 78U, 80U, 91U}) {
         auto invalid{Gathers[0]};
         invalid.words[bit / 32] ^= 1U << (bit % 32);
         CHECK_FALSE(Shader::Ampere::LowerToMaxwell(std::array{invalid, Exit}));
@@ -514,4 +515,50 @@ TEST_CASE("Half per-tap gathers prove offsets across an unrelated LEA.HI",
     REQUIRE(lowered);
     code[2].words[0] = 0x08017211;
     CHECK(Shader::Ampere::LowerToMaxwell(code));  // unproven offsets: runtime-offset gathers
+}
+
+TEST_CASE("Per-tap gathers with runtime offsets emit four offset gathers in SPIRV",
+          "[video_core][ampere][gather][logged_textures]") {
+    // Zelda: Ocarina of Time compute gather (native program at 0x11489bae00) loads its per-tap
+    // offsets behind control flow, so they are not constants: TLD4.PTP R10/R8, R4, R8, 2D.
+    const Instruction gather{{0x040a7b63, 0x33800408, 0x041e2f08, 0x100fc200}};
+    const auto lowered{Shader::Ampere::LowerToMaxwell(std::array{gather, Exit})};
+    INFO(lowered.error);
+    REQUIRE(lowered);
+    // Offsets from a constant buffer (runtime values), results stored so they stay live.
+    std::vector<u64> code;
+    for (u32 i = 0; i < 2; ++i)
+        code.push_back(0x4c98000000070000ULL | (8 + i) | (15ULL << 39) | (u64{i} << 20) |
+                       (3ULL << 34));
+    code.insert(code.end(), lowered.instructions.begin(), lowered.instructions.end());
+    for (const u32 source : {10U, 11U, 8U, 9U})
+        code.insert(code.end() - 1, 0xef58000000070000ULL | source | (255ULL << 8) |
+                                        (u64{source * 4} << 20) | (4ULL << 48));
+    TextureEnvironment env;
+    env.code = code;
+    env.binding = lowered.required_texture_buffer;
+    Shader::ObjectPool<Shader::Maxwell::Flow::Block> flow_pool;
+    Shader::Maxwell::Flow::CFG cfg{env, flow_pool, Shader::Maxwell::Location{0x50}};
+    Shader::ObjectPool<IR::Inst> inst_pool;
+    Shader::ObjectPool<IR::Block> block_pool;
+    Shader::HostTranslateInfo host;
+    host.ApplyDescriptorLimitPolicy();
+    auto program{Shader::Maxwell::TranslateProgram(inst_pool, block_pool, env, cfg, host)};
+    Shader::Profile profile{};
+    profile.supported_spirv = 0x00010400;
+    const auto spirv{Shader::Backend::SPIRV::EmitSPIRV(profile, program)};
+    REQUIRE(spirv.size() > 5);
+    u32 gathers{}, const_offsets{};
+    for (size_t word = 5; word < spirv.size();) {
+        const u32 count = spirv[word] >> 16, opcode = spirv[word] & 0xffff;
+        if (count == 0) break;
+        if (opcode == 96) { // OpImageGather
+            ++gathers;
+            // Image operands follow result type, id, sampled image, coordinate, component.
+            if (count > 6 && (spirv[word + 6] & 0x20)) ++const_offsets; // ConstOffsets
+        }
+        word += count;
+    }
+    CHECK(gathers == 4);
+    CHECK(const_offsets == 0);
 }
