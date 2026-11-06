@@ -94,6 +94,10 @@ public:
 
     [[nodiscard]] u64 CalculateHash() const;
 
+    [[nodiscard]] u64 DebugHash() const override {
+        return CalculateHash();
+    }
+
     void Dump(u64 pipeline_hash, u64 shader_hash) override;
 
     void Serialize(std::ofstream& file) const;

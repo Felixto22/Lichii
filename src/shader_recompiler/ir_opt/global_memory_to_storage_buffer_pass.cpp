@@ -14,10 +14,16 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include <cctype>
+#include <cstdlib>
+#include <string>
+
 #include <boost/container/flat_set.hpp>
+#include <fmt/format.h>
 #include <boost/container/small_vector.hpp>
 
 #include "common/alignment.h"
+#include "common/logging.h"
 #include "common/nx2_switch.h"
 #include "shader_recompiler/environment.h"
 #include "shader_recompiler/frontend/ir/basic_block.h"
@@ -1023,6 +1029,29 @@ std::optional<StorageBufferAddr> TrackPointerAddend(const LowAddrInfo& addr,
     return tied || (!legacy_nearest && candidates.size() != 1) ? std::nullopt : result;
 }
 
+/// EDEN_NX2_PTR_LOADED_SKIP=<hash>,... and EDEN_NX2_PTR_LOADED_ONLY=<hash>,...: pick by program
+/// hash which programs bind buffers behind loaded pointers (to find one that hangs a GPU).
+bool LoadedPointersAllowed(Environment& env) {
+    const auto read_list = [](const char* name) {
+        const char* text = std::getenv(name);
+        std::string list = text ? "," + std::string{text} + "," : std::string{};
+        for (char& c : list) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        return list;
+    };
+    static const std::string skip = read_list("EDEN_NX2_PTR_LOADED_SKIP");
+    static const std::string only = read_list("EDEN_NX2_PTR_LOADED_ONLY");
+    if (skip.empty() && only.empty()) {
+        return true;
+    }
+    const std::string key = fmt::format(",{:016x},", env.DebugHash());
+    if (!only.empty() && only.find(key) == std::string::npos) {
+        return false;
+    }
+    return skip.find(key) == std::string::npos;
+}
+
 /// The first slot and stride of a pointer array read at a dynamic constant buffer offset:
 /// (index << shift) + base or index * stride + base.
 std::optional<std::pair<u32, u32>> DynamicPointerSlots(const IR::Value& offset) {
@@ -1168,7 +1197,7 @@ small_vector<StorageBufferAddr, 4> NativePointerCandidates(const IR::U32& low_ad
             }
             break;
         case IR::Opcode::LoadGlobal64: {
-            if (!Common::Nx2Switch("EDEN_NX2_PTR_LOADED")) {
+            if (!Common::Nx2Switch("EDEN_NX2_PTR_LOADED") || !LoadedPointersAllowed(env)) {
                 break;
             }
             if (!Common::Nx2Switch(env.ShaderStage() == Stage::Compute ? "EDEN_NX2_PTR_LOADED_CS"
@@ -1600,6 +1629,17 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
         collect();
     }
     program.info.native_global_bounds |= info.native_runtime_bounds;
+    {
+        size_t loaded{};
+        for (const StorageBufferAddr& storage_buffer : info.set) {
+            loaded += storage_buffer.indirect != ~0U ? 1 : 0;
+        }
+        if (loaded != 0) {
+            LOG_INFO(Shader, "Loaded pointer bindings: {} {} in program {:016x}", loaded,
+                     env.ShaderStage() == Stage::Compute ? "compute" : "graphics",
+                     env.DebugHash());
+        }
+    }
     for (const StorageBufferAddr& storage_buffer : info.set) {
         program.info.storage_buffers_descriptors.push_back({
             .cbuf_index = storage_buffer.index,

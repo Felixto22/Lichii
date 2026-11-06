@@ -81,6 +81,9 @@ public:
     /// raw 8-byte arguments in constant buffers, without the NVN descriptor layout.
     [[nodiscard]] virtual bool IsNativeProgram() const { return false; }
 
+    /// The program hash the pipeline logs show (0 when unknown), for debug switches.
+    [[nodiscard]] virtual u64 DebugHash() const { return 0; }
+
     /// Native programs: whether the 8-byte constant at (index, offset) is a mapped GPU address.
     /// Native argument tables mix pointers with scalars (sizes, strides).
     [[nodiscard]] virtual bool IsCbufStorageBufferPointer(u32, u32) { return true; }
