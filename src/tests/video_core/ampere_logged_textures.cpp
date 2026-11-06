@@ -513,6 +513,5 @@ TEST_CASE("Half per-tap gathers prove offsets across an unrelated LEA.HI",
     INFO(lowered.error);
     REQUIRE(lowered);
     code[2].words[0] = 0x08017211;
-    CHECK(Shader::Ampere::LowerToMaxwell(code).error ==
-          "native per-tap gather nonconstant offsets");
+    CHECK(Shader::Ampere::LowerToMaxwell(code));  // unproven offsets: runtime-offset gathers
 }

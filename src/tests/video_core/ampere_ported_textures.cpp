@@ -82,30 +82,30 @@ TEST_CASE("Ampere per-tap gathers prove constants across unrelated arithmetic an
     REQUIRE(lowered);
     auto clobber = code;
     clobber[2].words[0] = 0x00067421;
-    REQUIRE(LowerToMaxwell(clobber).error == "native per-tap gather nonconstant offsets");
+    REQUIRE(LowerToMaxwell(clobber));  // unproven offsets: runtime-offset gathers
     clobber = code;
     clobber[3].words[0] = 0x04067b63;
-    REQUIRE(LowerToMaxwell(clobber).error == "native per-tap gather offset clobber");
+    REQUIRE(LowerToMaxwell(clobber));  // unproven offsets: runtime-offset gathers
     clobber = code;
     clobber[3].words[2] = 0x041e0f06;
-    REQUIRE(LowerToMaxwell(clobber).error == "native per-tap gather offset clobber");
+    REQUIRE(LowerToMaxwell(clobber));  // unproven offsets: runtime-offset gathers
     auto branch = code;
     branch[2].words = {0x00007947, 0, 0x03800000, 0};
-    REQUIRE(LowerToMaxwell(branch).error == "native per-tap gather control-flow proof");
+    REQUIRE(LowerToMaxwell(branch));  // unproven offsets: runtime-offset gathers
 }
 
-TEST_CASE("Ampere per-tap gathers reject unproven offsets and unsupported modes",
+TEST_CASE("Ampere per-tap gathers accept unproven offsets and reject unsupported modes",
           "[video_core][ampere][gather]") {
     // The captured instruction alone has no visible offset definitions.
     const auto alone = LowerToMaxwell(std::array{CapturedPerTapGather, Exit});
-    REQUIRE_FALSE(alone);
-    REQUIRE(alone.error == "native per-tap gather missing offsets");
+    INFO(alone.error);
+    REQUIRE(alone);  // unproven offsets: runtime-offset gathers
     // Offsets are signed 6-bit values, one per byte.
     for (const u32 value : {32U, 127U, 128U, 223U}) {
         for (u32 shift = 0; shift < 32; shift += 8) {
             const auto lowered =
                 LowerToMaxwell(PerTapProgram((0xff00ff00U & ~(255U << shift)) | (value << shift)));
-            REQUIRE(lowered.error == "native per-tap gather offset range");
+            REQUIRE(lowered);  // unproven offsets: runtime-offset gathers
         }
     }
     for (const u32 bit : {60U, 72U, 76U, 78U, 80U, 81U, 89U, 91U}) {
@@ -116,10 +116,10 @@ TEST_CASE("Ampere per-tap gathers reject unproven offsets and unsupported modes"
     }
     auto invalid = PerTapProgram();
     invalid[0].words[0] = 0x00081802; // predicated offset definition
-    REQUIRE(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+    REQUIRE(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     invalid = PerTapProgram();
     invalid[1].words[0] = 0x000a7802; // R9 never defined
-    REQUIRE(LowerToMaxwell(invalid).error == "native per-tap gather missing offsets");
+    REQUIRE(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     // Register pairs that would reach the lowering scratch registers.
     for (const u32 word : {0xf50a7b63U, 0x04f57b63U}) {
         invalid = PerTapProgram();
@@ -138,8 +138,9 @@ TEST_CASE("Ampere per-tap gathers reject unproven offsets and unsupported modes"
     REQUIRE_FALSE(LowerToMaxwell(invalid));
     const Instruction branch{{0x00007947, 0, 0x03800000, 0}};
     const auto program = PerTapProgram();
-    REQUIRE_FALSE(LowerToMaxwell(std::array{branch, program[0], program[1], program[2], Exit}));
-    REQUIRE_FALSE(LowerToMaxwell(std::array{program[0], program[1], program[2], branch, Exit}));
+    // Unbounded control flow before the gather: offsets pass through as registers.
+    REQUIRE(LowerToMaxwell(std::array{branch, program[0], program[1], program[2], Exit}));
+    REQUIRE(LowerToMaxwell(std::array{program[0], program[1], program[2], branch, Exit}));
 }
 
 TEST_CASE("Ampere gathers without per-tap offsets keep their previous lowering",
@@ -200,13 +201,13 @@ TEST_CASE("Ampere half gathers prove literal IMAD offsets across outgoing branch
     CHECK(lowered.instructions[start + 1] == MoveImmediate(7ULL << 16, 249, 0x01010100));
     auto invalid = code;
     invalid[2].words[1] = 0;
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather control-flow proof");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     invalid = code;
     invalid[0].words[0] = 0xff001424;
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     invalid = code;
     invalid[2].words = {0x00007805, 0, 0x0001ff00, 0};
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
 }
 
 TEST_CASE("Ampere guarded IMAD offsets remain constant across unrelated predicates",
@@ -234,27 +235,27 @@ TEST_CASE("Ampere guarded IMAD offsets remain constant across unrelated predicat
             if (guard == 7) {
                 CHECK(LowerToMaxwell(changed));
             } else {
-                CHECK(LowerToMaxwell(changed).error == "native per-tap gather nonconstant offsets");
+                CHECK(LowerToMaxwell(changed));  // unproven offsets: runtime-offset gathers
             }
         }
     }
     for (const u32 instruction : {2U, 3U}) {
         auto invalid = code;
         invalid[instruction].words[2] = (invalid[instruction].words[2] & ~(7U << 17)) | (1U << 17);
-        CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+        CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     }
     auto invalid = code;
     invalid[3].words[2] = (invalid[3].words[2] & ~(7U << 20)) | (1U << 20);
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     invalid = code;
     invalid[2].words = {0x041c7810, 4, 0x07f3e0ff, 0};
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     invalid = code;
     invalid[4].words[1] = 0;
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather control-flow proof");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
     invalid = code;
     invalid[2].words = {0x00107805, 0, 0x0001ff00, 0};
-    CHECK(LowerToMaxwell(invalid).error == "native per-tap gather nonconstant offsets");
+    CHECK(LowerToMaxwell(invalid));  // unproven offsets: runtime-offset gathers
 }
 
 TEST_CASE("Ampere half texture results keep the first component in the low lane",
@@ -385,4 +386,40 @@ TEST_CASE("Ampere array depth comparisons support nonlegacy descriptor bindings"
     const auto begin = mixed.instructions.begin() + mixed.source_instruction_offsets[1];
     REQUIRE(std::equal(alternate.begin(), alternate.end(), begin));
     REQUIRE(begin + alternate.size() + 1 == mixed.instructions.end());
+}
+
+TEST_CASE("Ampere gathers from a second descriptor buffer lower to bindless Maxwell TLD4.B",
+          "[video_core][ampere][gather]") {
+    // Zelda: Ocarina of Time terrain shader (native program at 0x11492d8200): a depth-compare
+    // TLD4 reading constant buffer 2 after textures from buffer 0 were bound.
+    constexpr Instruction DepthGatherBuffer2{{0x180c7b63, 0x30800e1c, 0x001e4f0e, 0x000f4200}};
+    constexpr Instruction DepthGatherBuffer0{{0x180c7b63, 0x30000e1c, 0x001e4f0e, 0x000f4200}};
+    const auto lowered = LowerToMaxwell(std::array{DepthGatherBuffer0, DepthGatherBuffer2, Exit});
+    INFO(lowered.error);
+    REQUIRE(lowered);
+    REQUIRE(lowered.required_texture_buffer == 0);
+    const auto count = [&](u32 shift, u64 opcode) {
+        return std::ranges::count_if(lowered.instructions,
+                                     [&](u64 insn) { return (insn >> shift) == opcode; });
+    };
+    // One plain TLD4 (110010) for buffer 0, one TLD4.B (1101111011) for buffer 2, the handle
+    // loaded from c2[0xe].
+    CHECK(count(58, 0b110010) == 1);
+    CHECK(count(54, 0b1101111011) == 1);
+    const u64 handle = 0x4c98000000070000ULL | 246 | (15ULL << 39) | (0xeULL << 20) | (2ULL << 34);
+    CHECK(std::ranges::count(lowered.instructions, handle) == 1);
+}
+
+TEST_CASE("Ampere per-tap gathers with unproven offsets pass the offset registers through",
+          "[video_core][ampere][gather]") {
+    // Offsets defined behind a branch: no constant proof, so R8/R9 are copied to R248/R249.
+    auto code = PerTapProgram();
+    code[1].words = {0x00007947, 0, 0x03800000, 0};
+    const auto lowered = LowerToMaxwell(code);
+    INFO(lowered.error);
+    REQUIRE(lowered);
+    for (u32 i = 0; i < 2; ++i)
+        CHECK(std::ranges::count_if(lowered.instructions, [&](u64 insn) {
+                  return (insn & ~(0xfULL << 16)) == (Copy(0, 248 + i, 8 + i) & ~(0xfULL << 16));
+              }) == 1);
 }
