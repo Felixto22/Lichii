@@ -158,6 +158,19 @@ public:
     /// Waits until the back executed everything sent so far.
     void Drain(DrainSite site = DrainSite::Other);
 
+    /// The position after the last entry sent (for WaitUntil).
+    [[nodiscard]] u64 Position() const {
+        return write_position;
+    }
+    /// The position after the last compute, copy or other-engine memory write sent.
+    [[nodiscard]] u64 LastWriterPosition() const {
+        return last_writer_position;
+    }
+    /// Waits until the back executed the entries before `target`. Returns whether it waited.
+    bool WaitUntil(u64 target, DrainSite site) {
+        return WaitFor((std::min)(target, write_position), site);
+    }
+
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {
         last_writer_position = write_position;

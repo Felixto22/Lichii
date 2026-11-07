@@ -42,6 +42,11 @@ bool DmaPusher::IsMemoryWriter(const Engines::EngineInterface& engine, Engines::
     if (type == Engines::EngineTypes::MaxwellDMA) {
         return method >= MacroRegistersStart || engine.execution_mask[method];
     }
+    // Inline uploads and 2D copies also write guest memory (what a macro DMA read may wait for:
+    // Maxwell3D::FrontDmaRead). Puller semaphores note themselves (Puller::CallPullerMethod).
+    if (type == Engines::EngineTypes::KeplerMemory || type == Engines::EngineTypes::Fermi2D) {
+        return method < engine.execution_mask.size() && engine.execution_mask[method];
+    }
     return false;
 }
 

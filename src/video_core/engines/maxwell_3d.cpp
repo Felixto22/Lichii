@@ -1034,6 +1034,17 @@ struct Maxwell3D::FrontState {
     /// then can it have a deferred instanced draw to issue at the end of a macro.
     bool draw_pending{true};
     bool skip_same{}; ///< SkipSameValueWrites() && FrontSkipSame(), read once
+    /// Guest memory the methods sent to the back will write (constant buffer data, inline
+    /// uploads, reports), with the split position after each: a macro DMA read waits only for
+    /// the writes it overlaps (EDEN_NX2_DMA_READ_WAIT=0: for everything sent, as before).
+    struct PendingWrite {
+        GPUVAddr begin;
+        GPUVAddr end;
+        u64 position;
+        bool report; ///< Query results land later: a read overlapping one drains fully
+    };
+    std::vector<PendingWrite> pending_writes;
+    u64 pending_writes_dropped_position{};
 };
 
 namespace {
@@ -1183,6 +1194,51 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
     } else {
         split.Method(this, method, argument, is_last_call, nullptr);
     }
+    FrontNoteMemoryWrite(split, fs, method, 1);
+}
+
+void Maxwell3D::FrontNoteMemoryWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 method,
+                                     u32 words) {
+    constexpr u32 cb_data = MAXWELL3D_REG_INDEX(const_buffer.buffer);
+    constexpr u32 upload = MAXWELL3D_REG_INDEX(upload);
+    constexpr u32 report = MAXWELL3D_REG_INDEX(report_semaphore);
+    GPUVAddr begin{};
+    GPUVAddr end{};
+    bool is_report = false;
+    if (method >= cb_data && method < cb_data + 16) {
+        // The front advanced the offset past these words already.
+        const GPUVAddr base = (GPUVAddr{fs.regs[MAXWELL3D_REG_INDEX(const_buffer.address_high)]} << 32) |
+                              fs.regs[MAXWELL3D_REG_INDEX(const_buffer.address_low)];
+        end = base + fs.regs[MAXWELL3D_REG_INDEX(const_buffer.offset)];
+        begin = end - u64{words} * sizeof(u32);
+    } else if (method == MAXWELL3D_REG_INDEX(launch_dma) ||
+               method == MAXWELL3D_REG_INDEX(inline_data)) {
+        // Inline upload: the destination, generously sized (block linear layouts spread).
+        begin = (GPUVAddr{fs.regs[upload + 2]} << 32) | fs.regs[upload + 3];
+        const u64 linear = u64{fs.regs[upload + 0]} * (std::max)(fs.regs[upload + 1], 1U);
+        const u64 pitched = u64{fs.regs[upload + 4]} * (std::max)(fs.regs[upload + 7], 1U);
+        end = begin + (std::max)({linear, pitched, u64{4096}}) * 4;
+    } else if (method == report + 3) {
+        begin = (GPUVAddr{fs.regs[report + 0]} << 32) | fs.regs[report + 1];
+        end = begin + 32;
+        is_report = true;
+    } else {
+        return;
+    }
+    const u64 position = split.Position();
+    auto& writes = fs.pending_writes;
+    if (!writes.empty() && writes.back().report == is_report && writes.back().begin <= begin &&
+        begin <= writes.back().end) {
+        writes.back().end = (std::max)(writes.back().end, end);
+        writes.back().position = position;
+        return;
+    }
+    if (writes.size() >= 512) {
+        // Keep the newest half: every read waits for the dropped ones.
+        writes.erase(writes.begin(), writes.begin() + 256);
+        fs.pending_writes_dropped_position = writes.front().position;
+    }
+    writes.push_back({begin, end, position, is_report});
 }
 
 void Maxwell3D::FrontCallMethod(Core::System& system, VideoCommon::GpuSplit& split, u32 method,
@@ -1288,6 +1344,16 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
         }
     }
     split.MultiMethod(this, method, base_start, amount, methods_pending, nullptr);
+    if (method >= cb_data && method < cb_data + 16) {
+        FrontNoteMemoryWrite(split, fs, method, amount);
+    } else {
+        for (const u32 writer : {MAXWELL3D_REG_INDEX(inline_data), MAXWELL3D_REG_INDEX(launch_dma),
+                                 MAXWELL3D_REG_INDEX(report_semaphore) + 3}) {
+            if (writer >= method && writer < method + amount) {
+                FrontNoteMemoryWrite(split, fs, writer, 1);
+            }
+        }
+    }
 }
 
 void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split,
@@ -1357,7 +1423,36 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
         memory_manager.ReadBlockUnsafe(source, diag_before.data(), read_bytes);
     }
     VideoCommon::Nx2Profile::CountDmaRead(macro);
-    split.Drain(VideoCommon::DrainSite::MacroDmaRead);
+    static const bool targeted_wait = [] {
+        const char* value = std::getenv("EDEN_NX2_DMA_READ_WAIT");
+        return value == nullptr || value[0] != '0';
+    }();
+    bool drained = true;
+    if (targeted_wait && !Tegra::Nx2CmdPageDiag::g_enabled) {
+        // Pages GPU work wrote (dispatch results, render targets) may change under any queued
+        // draw or dispatch: wait for everything. Other memory only changes by the writes the
+        // front saw (constant buffer data, inline uploads, reports) and by other engines' work.
+        bool gpu_written = false;
+        for (GPUVAddr page = source & ~GPUVAddr{0xfff}; page < source + read_bytes; page += 0x1000) {
+            const auto device = memory_manager.GpuToCpuAddress(page);
+            gpu_written |= !device || Tegra::Nx2IsGpuWritten(*device);
+        }
+        u64 target = split.LastWriterPosition();
+        for (const auto& write : fs.pending_writes) {
+            if (write.begin < source + read_bytes && source < write.end) {
+                target = (std::max)(target, write.position);
+                gpu_written |= write.report;
+            }
+        }
+        if (!gpu_written) {
+            target = (std::max)(target, fs.pending_writes_dropped_position);
+            split.WaitUntil(target, VideoCommon::DrainSite::MacroDmaRead);
+            drained = false;
+        }
+    }
+    if (drained) {
+        split.Drain(VideoCommon::DrainSite::MacroDmaRead);
+    }
     if (VideoCommon::QueryDma::TraceEnabled()) {
         split.Run(
             [this, macro, method, source, read_bytes] {
@@ -1372,7 +1467,8 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     if (VideoCommon::Nx2Profile::Enabled()) {
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::DmaReadBytes, read_bytes);
     }
-    if (memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
+    if (drained &&
+        memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
         split.Run(
             [memory = &memory_manager, source, read_bytes] {
                 memory->FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);

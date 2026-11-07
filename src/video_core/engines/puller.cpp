@@ -396,6 +396,7 @@ void Puller::CallPullerMethod(DmaPusher& dma_pusher, const MethodCall& method_ca
         break;
     case BufferMethods::SemaphoreOperation: {
         ProcessSemaphoreTriggerMethod(dma_pusher);
+        VideoCommon::GpuSplit::Get().NoteWriter();
         break;
     }
     case BufferMethods::NonStallInterrupt: {
@@ -429,6 +430,7 @@ void Puller::CallPullerMethod(DmaPusher& dma_pusher, const MethodCall& method_ca
         } else {
             ProcessSemaphoreRelease(dma_pusher);
         }
+        VideoCommon::GpuSplit::Get().NoteWriter();
         break;
     }
     case BufferMethods::Yield: {
