@@ -346,7 +346,11 @@ private:
         }
 
         const char* Name() const override {
+#if defined(__cpp_rtti) || defined(__GXX_RTTI) || defined(_CPPRTTI)
             return typeid(T).name();
+#else
+            return "command";
+#endif
         }
 
     private:
