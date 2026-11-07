@@ -56,3 +56,22 @@ que hoy cuesta 19 ms por cuadro entre el front y el back.
 
 Cada etapa se compila con un interruptor (`EDEN_NX2_DRAW_THREAD=0/1`) y solo se prueba
 en el juego al terminarla.
+
+## 2026-11-07: el bucle de recarga (resuelto) y el nuevo freno
+
+- Ocarina recargaba sin parar `Tex/CmnTex_Map_Soil_FairyFountain_Floor_D_Nrm.bntx.zs` (+ el modelo
+  `Land_FairyFountain_Base_A_01.bfres.zs`) ~20 veces/s: ~200 MB leidos cada 5 s, dos nucleos invitados
+  en zstd y busquedas de nombres. Causa: el volcado NUP del usuario tiene 3 archivos .zs con los
+  primeros 8-12 KiB en ceros (tambien `RBake_Scene_GanonStage_G_2_1_d0_t0.bntx.zs` y
+  `Rock_WaterTemple_Gate_M_01_Nrm.bntx.zs`); el SHA del NUP coincide, el dano viene del volcado.
+- Herramientas: estadisticas de lecturas de IStorage con nombres RomFS, pila de llamadas del invitado,
+  mapa del JIT (EDEN_NX2_JIT_MAP) + direcciones del muestreador (.jit), contadores de ejecucion por
+  bloque (EDEN_NX2_BLOCK_COUNTS). La funcion de carga fallaba 134 de 268 veces en 10 s con
+  ZSTD_CONTENTSIZE_ERROR.
+- Arreglo: Nx2ZstdRepairFile (nup_container.cpp) sirve un hermano con el mismo sufijo, rellenado con
+  un frame saltable (EDEN_NX2_REPAIR_ZS=0 lo apaga). Resultado: quieto 25-31 -> 22 ms (45 FPS),
+  caminando 39-50 -> 29 ms (34 FPS, a ratos 38 ms).
+- Ahora: nucleos invitados ~25 % JIT y ~50 % inactivos; el hilo GPUBack ocupado ~79 % y el frontal
+  espera en Backoff ~35 %: el hilo de atras vuelve a ser el freno. Costes repartidos (memcpy de
+  uniform buffers, VirtualProtect desde RasterizerMarkRegionCached ~3.5 %, IterateWords); hace
+  falta un perfil con simbolos NOICF para atribuir bien.
