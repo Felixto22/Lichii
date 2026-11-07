@@ -6,7 +6,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <map>
+#include <mutex>
 #include <thread>
+#include <tuple>
 
 #include "core/file_sys/errors.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -45,6 +48,32 @@ Result IStorage::Read(
 
     // Read the data from the Storage backend
     backend->Read(out_bytes.data(), length, offset);
+
+    // Every 5 s: how much the game read, and how much of it it had read before (a game that
+    // keeps re-reading and decompressing the same data spends its CPU there).
+    {
+        static std::mutex stats_mutex;
+        static std::map<std::tuple<const void*, s64, s64>, u32> seen;
+        static u64 reads, bytes, repeated_reads, repeated_bytes;
+        static auto last_log = std::chrono::steady_clock::now();
+        std::scoped_lock lock{stats_mutex};
+        ++reads;
+        bytes += static_cast<u64>(length);
+        if (seen.size() < 200'000) {
+            if (u32& count = seen[{backend.get(), offset, length}]; count++ != 0) {
+                ++repeated_reads;
+                repeated_bytes += static_cast<u64>(length);
+            }
+        }
+        const auto log_now = std::chrono::steady_clock::now();
+        if (log_now - last_log > std::chrono::seconds(5)) {
+            LOG_INFO(Service_FS,
+                     "nx2 storage reads: {} in 5 s ({} KiB), {} of them read before ({} KiB)",
+                     reads, bytes >> 10, repeated_reads, repeated_bytes >> 10);
+            reads = bytes = repeated_reads = repeated_bytes = 0;
+            last_log = log_now;
+        }
+    }
 
     R_SUCCEED();
 }

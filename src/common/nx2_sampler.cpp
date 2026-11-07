@@ -372,9 +372,21 @@ void StartFromEnvironment() {
     const char* out = std::getenv("EDEN_NX2_SAMPLE_OUT");
     std::thread{[patterns = SplitNames(names), start = EnvSeconds("EDEN_NX2_SAMPLE_START", 60.0),
                  seconds = EnvSeconds("EDEN_NX2_SAMPLE_SECONDS", 30.0),
-                 out = std::string{out != nullptr ? out : "nx2_samples.txt"}] {
+                 out = std::string{out != nullptr ? out : "nx2_samples.txt"},
+                 count = EnvSeconds("EDEN_NX2_SAMPLE_COUNT", 1.0),
+                 gap = EnvSeconds("EDEN_NX2_SAMPLE_GAP", 30.0)] {
+        // EDEN_NX2_SAMPLE_COUNT windows, EDEN_NX2_SAMPLE_GAP s apart: the second goes to
+        // <out without .txt>_2.txt and so on (e.g. standing still, then moving).
         std::this_thread::sleep_for(std::chrono::duration<double>(start));
-        SampleThreads(patterns, seconds, out);
+        for (int i = 0; i < static_cast<int>(count); ++i) {
+            std::string path = out;
+            if (i != 0) {
+                const size_t dot = path.rfind('.');
+                path.insert(dot == std::string::npos ? path.size() : dot, fmt::format("_{}", i + 1));
+                std::this_thread::sleep_for(std::chrono::duration<double>(gap));
+            }
+            SampleThreads(patterns, seconds, path);
+        }
     }}.detach();
 }
 
