@@ -120,6 +120,8 @@ public:
     bool TryCacheInvalidation(DAddr addr, u64 size) override;
     bool OnCPUWrite(DAddr addr, u64 size) override;
     void InvalidateGPUCache() override;
+    /// Applies collected guest CPU writes before a draw or dispatch binds its buffers.
+    void ApplyPendingCpuWrites();
     void UnmapMemory(DAddr addr, u64 size) override;
     void ModifyGPUMemory(size_t as_id, GPUVAddr addr, u64 size) override;
     void SignalFence(std::function<void()>&& func) override;

@@ -449,6 +449,15 @@ void GPU::InvalidateGPUCache() {
     impl->InvalidateGPUCache();
 }
 
+bool GPU::HasAnyPendingCPUWrites() {
+    for (auto& manager : impl->system.GetGPUDirtyMemoryManager()) {
+        if (manager.HasPending()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool GPU::HasPendingCPUWrites(DAddr addr, u64 size) {
     for (auto& manager : impl->system.GetGPUDirtyMemoryManager()) {
         if (manager.Overlaps(addr, size)) {

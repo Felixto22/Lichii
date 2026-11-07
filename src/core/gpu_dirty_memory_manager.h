@@ -78,6 +78,15 @@ public:
         front_buffer.clear();
     }
 
+    /// Whether any collected write is not yet gathered.
+    bool HasPending() {
+        if (IsValid(current.load(std::memory_order_acquire).address)) {
+            return true;
+        }
+        std::scoped_lock lk(guard);
+        return !back_buffer.empty();
+    }
+
     /// Returns true when collected writes not yet gathered overlap [address, address + size).
     bool Overlaps(PAddr address, size_t size) {
         const PAddr end = address + size;

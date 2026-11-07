@@ -151,6 +151,8 @@ public:
     void InvalidateGPUCache();
     /// Returns true when guest CPU writes to the range are collected but not yet applied.
     [[nodiscard]] bool HasPendingCPUWrites(DAddr addr, u64 size);
+    /// Whether any guest CPU write into GPU memory is collected and not yet applied.
+    [[nodiscard]] bool HasAnyPendingCPUWrites();
     /// Signal the ending of command list.
     void OnCommandListEnd();
 

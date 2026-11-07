@@ -24,6 +24,7 @@
 
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 
+#include "common/nx2_switch.h"
 #include "common/assert.h"
 #include "common/dkb_frame_trace.h"
 #include "shader_recompiler/exception.h"
@@ -449,6 +450,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         TraceRenderState(is_indexed, "mesh-skipped", nullptr);
         return;
     }
+    ApplyPendingCpuWrites();
     std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
     // update engine as channel may be different.
     pipeline->SetEngine(maxwell3d, gpu_memory);
@@ -1372,6 +1374,7 @@ void RasterizerVulkan::DispatchCompute() {
         if (kepler_compute->IsNativeMode()) throw Shader::RuntimeError("Native compute pipeline unavailable");
         return;
     }
+    ApplyPendingCpuWrites();
     std::scoped_lock lock{texture_cache.mutex, buffer_cache.mutex};
     std::optional<ByteAddressedShadow> byte_addressed_shadow;
     buffer_cache.Nx2CollectListCopies(true);
@@ -1710,6 +1713,18 @@ bool RasterizerVulkan::TryCacheInvalidation(DAddr addr, u64 size) {
     }
     pipeline_cache.InvalidateRegion(addr, size);
     return true;
+}
+
+void RasterizerVulkan::ApplyPendingCpuWrites() {
+    // Guest CPU writes into GPU memory are collected and applied at fences and cache
+    // invalidations. With the GPU thread split, Ocarina of Time's HUD draws read their CPU-written
+    // vertex data before the next fence had applied it, and the HUD blinked
+    // (EDEN_NX2_PENDING_WRITE_TRACE). Apply them before a draw or dispatch binds its buffers.
+    // EDEN_NX2_APPLY_CPU_WRITES=0 turns it off.
+    static const bool enabled = Common::Nx2Switch("EDEN_NX2_APPLY_CPU_WRITES");
+    if (enabled && gpu.HasAnyPendingCPUWrites()) {
+        gpu.InvalidateGPUCache();
+    }
 }
 
 void RasterizerVulkan::InvalidateGPUCache() {
