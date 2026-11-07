@@ -23,6 +23,7 @@
 #include "dynarmic/backend/x64/emit_x64.h"
 #include "dynarmic/backend/x64/nzcv_util.h"
 #include "dynarmic/backend/x64/perf_map.h"
+#include <array>
 #include "dynarmic/backend/x64/stack_layout.h"
 #include "dynarmic/frontend/A64/a64_location_descriptor.h"
 #include "dynarmic/frontend/A64/a64_types.h"
@@ -163,6 +164,14 @@ finish_this_inst:
     block_ranges.AddRange(range, descriptor);
 
     auto bdesc = RegisterBlock(descriptor, entrypoint, size);
+    if (PerfMapEnabled()) {
+        std::array<u32, 512> words{};
+        size_t count = 0;
+        for (u64 pc = descriptor.PC(); pc < end_location.PC() && count < words.size(); pc += 4) {
+            words[count++] = conf.callbacks->MemoryReadCode(pc).value_or(0);
+        }
+        PerfMapBlockCode(entrypoint, descriptor.PC(), words.data(), count);
+    }
     code.DisableWriting();
     shared_labels.clear();
     return bdesc;

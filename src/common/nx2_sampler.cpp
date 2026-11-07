@@ -295,6 +295,23 @@ std::string Report(const std::vector<Target>& targets, const std::vector<Sample>
         }
         ++folded[line];
     }
+    // <out>.jit: the JIT code addresses the threads were at ("thread address count"), for the
+    // block map dynarmic writes with EDEN_NX2_JIT_MAP.
+    {
+        std::map<std::pair<unsigned, DWORD64>, unsigned> jit;
+        for (const Sample& sample : samples) {
+            if (sample.depth != 0 && symbolizer.Name(sample.frames[0]) == "(jit)") {
+                ++jit[{sample.thread, sample.frames[0]}];
+            }
+        }
+        if (std::FILE* const out = std::fopen((std::string{path} + ".jit").c_str(), "w")) {
+            for (const auto& [key, count] : jit) {
+                std::fprintf(out, "%s %016llx %u\n", targets[key.first].name.c_str(),
+                             static_cast<unsigned long long>(key.second), count);
+            }
+            std::fclose(out);
+        }
+    }
     if (std::FILE* const out = std::fopen((std::string{path} + ".folded").c_str(), "w")) {
         for (const auto& [line, count] : folded) {
             std::fprintf(out, "%s %u\n", line.c_str(), count);

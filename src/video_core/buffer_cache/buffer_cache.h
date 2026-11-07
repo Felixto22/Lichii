@@ -285,7 +285,31 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
                                            device_addr_end_aligned - device_addr_start_aligned);
     // A preflushable mark persists and downloads later GPU writes at every fence. Native titles
     // instead keep read traps and flush on demand.
-    const bool preflush = !Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
+    bool preflush = !Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
+    // A few small ranges the guest CPU reads after every GPU write (Ocarina reads two 4 KiB
+    // pages ~2.6 times a frame, each read stalling its core ~3.7 ms for the whole GPU queue):
+    // from the third read on, download them at every fence like non-native titles do, and let
+    // the reads go straight to guest memory. EDEN_NX2_PREFLUSH_HOT=0 keeps flushing on demand.
+    static const bool preflush_hot = [] {
+        const char* value = std::getenv("EDEN_NX2_PREFLUSH_HOT");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (!preflush && preflush_hot && !area->preemtive &&
+        device_addr_end_aligned - device_addr_start_aligned <= 16 * Core::DEVICE_PAGESIZE &&
+        nx2_read_flushes.size() < 4096) {
+        u32 reads = 0;
+        for (DAddr page = device_addr_start_aligned; page < device_addr_end_aligned;
+             page += Core::DEVICE_PAGESIZE) {
+            reads = (std::max)(reads, ++nx2_read_flushes[page]);
+        }
+        if (reads >= 3) {
+            preflush = true;
+            if (reads == 3) {
+                LOG_INFO(HW_GPU, "nx2 hot CPU read range [{:#x}, {:#x}) now downloads at fences",
+                         device_addr_start_aligned, device_addr_end_aligned);
+            }
+        }
+    }
     if (!area->preemtive) {
         if (Nx2DownloadTrace::g_enabled) [[unlikely]] {
             Nx2DownloadTrace::Marked(device_addr_start_aligned,

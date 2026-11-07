@@ -713,6 +713,9 @@ private:
     }
 
     ReadTrapTracker read_trapped_ranges;
+    /// Reactive flushes per device page (native titles): a page the guest CPU keeps reading
+    /// becomes preflushable (EDEN_NX2_PREFLUSH_HOT, see GetFlushArea).
+    std::unordered_map<DAddr, u32> nx2_read_flushes;
     /// Ranges the guest CPU read after GPU writes. A read that must flush downloads the GPU
     /// writes in all of them, so the reads that usually follow it find nothing left to flush.
     Common::RangeSet<DAddr> cpu_read_ranges;
