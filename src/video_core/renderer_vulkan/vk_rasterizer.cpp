@@ -1723,7 +1723,20 @@ void RasterizerVulkan::ApplyPendingCpuWrites() {
     // (EDEN_NX2_PENDING_WRITE_TRACE). Apply them before a draw or dispatch binds its buffers.
     // EDEN_NX2_APPLY_CPU_WRITES=0 turns it off.
     static const bool enabled = Common::Nx2Switch("EDEN_NX2_APPLY_CPU_WRITES");
-    if (enabled && gpu.HasAnyPendingCPUWrites()) {
+    // While the presented frame's guard is pending, every guest write to GPU-cached memory saved
+    // the page first (Nx2Snapshot::Capture) and this thread reads the saved bytes: applying the
+    // writes now only re-uploads the same old data (and churns page protections), and the pages
+    // are invalidated again when the frame is released. Apply them once the guard passes
+    // (EDEN_NX2_APPLY_DURING_GUARD=1 applies them on every draw as before).
+    static const bool during_guard = [] {
+        const char* value = std::getenv("EDEN_NX2_APPLY_DURING_GUARD");
+        return value != nullptr && value[0] == '1';
+    }();
+    u32 guard_syncpoint{};
+    u32 guard_value{};
+    const bool guarded = !during_guard && Core::Nx2Snapshot::Enabled() &&
+                         gpu.PendingFrameGuard(guard_syncpoint, guard_value);
+    if (enabled && !guarded && gpu.HasAnyPendingCPUWrites()) {
         gpu.InvalidateGPUCache();
     }
     // Pages saved for a presented frame this thread has now processed: upload what the game
