@@ -17,6 +17,7 @@
 #include <cstring>
 #include <string>
 
+#include "common/nx2_timeline.h"
 #include "common/dkb_cpu_trace.h"
 #include "common/logging.h"
 #include "common/settings.h"
@@ -206,6 +207,8 @@ void GpuSplit::Drain(DrainSite site) {
         return;
     }
     Publish();
+    const Common::Nx2Timeline::Span wait_span{Common::Nx2Timeline::Kind::FrontWait,
+                                              static_cast<u32>(site)};
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
     const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Ticks() : 0;
     for (u32 spins = 0;; ++spins) {
@@ -232,6 +235,8 @@ bool GpuSplit::WaitFor(u64 target, DrainSite site) {
     if (consumed_cache >= target) {
         return false;
     }
+    const Common::Nx2Timeline::Span wait_span{Common::Nx2Timeline::Kind::FrontWait,
+                                              static_cast<u32>(site)};
     Nx2Profile::Scope scope{Nx2Profile::Zone::WriterWait};
     wait_target.store(target, std::memory_order_seq_cst);
     Publish();
@@ -451,6 +456,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
                 continue;
             }
         }
+        const Common::Nx2Timeline::Span busy_span{Common::Nx2Timeline::Kind::BackBusy};
         u64 last_store = read_position;
         while (read_position != available) {
             const size_t index = read_position & RingMask;
