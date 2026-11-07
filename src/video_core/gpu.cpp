@@ -291,9 +291,9 @@ struct GPU::Impl {
         }
         const u32 syncpoint = static_cast<u32>(guard >> 32);
         const u32 value = static_cast<u32>(guard);
-        auto& syncpoints = system.Host1x().GetSyncpointManager();
+        auto& syncpoint_manager = system.Host1x().GetSyncpointManager();
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{30};
-        while (!syncpoints.IsReadyGuest(syncpoint, value) &&
+        while (!syncpoint_manager.IsReadyGuest(syncpoint, value) &&
                !shutting_down.load(std::memory_order_relaxed) &&
                std::chrono::steady_clock::now() < deadline) {
             std::this_thread::yield();
