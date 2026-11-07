@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "common/nx2_timeline.h"
 
 namespace Core::Nx2Snapshot {
 
@@ -63,6 +64,7 @@ inline void Capture(u64 device_page, const u8* page_pointer, u32 syncpoint, u32 
     if (page_pointer == nullptr) {
         return;
     }
+    const Common::Nx2Timeline::Span timeline_span{Common::Nx2Timeline::Kind::Mark, 1};
     State& state = Get();
     std::scoped_lock lk{state.mutex};
     auto& slot = state.pages[device_page];
