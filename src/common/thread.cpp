@@ -9,6 +9,7 @@
 #include <string>
 #include <thread>
 
+#include "common/nx2_timeline.h"
 #include "common/adpf.h"
 #include "common/error.h"
 #include "common/event_wait.h"
@@ -504,6 +505,7 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
 }
 
 void SetCurrentThreadName(const char* name) {
+    Common::Nx2Timeline::SetThreadName(name);
 #ifdef _MSC_VER
     // Sets the debugger-visible name of the current thread.
     if (auto pf = (decltype(&SetThreadDescription))(void*)GetProcAddress(GetModuleHandle(TEXT("KernelBase.dll")), "SetThreadDescription"); pf)

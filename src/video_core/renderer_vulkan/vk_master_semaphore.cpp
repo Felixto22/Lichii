@@ -7,6 +7,7 @@
 #include <thread>
 
 #include <ranges>
+#include "common/nx2_timeline.h"
 #include "common/settings.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -77,6 +78,7 @@ void MasterSemaphore::Refresh() {
 }
 
 void MasterSemaphore::Wait(u64 tick) {
+    const Common::Nx2Timeline::Span timeline_span{Common::Nx2Timeline::Kind::GpuWait};
     if (!semaphore) {
         // Fast check: already reached the requested tick?
         if (gpu_tick.load(std::memory_order_acquire) >= tick) {

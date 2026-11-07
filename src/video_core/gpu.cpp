@@ -14,6 +14,7 @@
 #include <thread>
 #include <utility>
 
+#include "common/nx2_timeline.h"
 #include "common/assert.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -228,6 +229,7 @@ struct GPU::Impl {
     }
 
     VideoCore::RasterizerDownloadArea OnCPURead(DAddr addr, u64 size) {
+        const Common::Nx2Timeline::Span timeline_span{Common::Nx2Timeline::Kind::CpuRead};
         auto raster_area = renderer->ReadRasterizer()->GetFlushArea(addr, size);
         if (raster_area.preemtive) {
             return raster_area;
@@ -289,6 +291,7 @@ struct GPU::Impl {
         if (guard == ~u64{0}) [[likely]] {
             return;
         }
+        const Common::Nx2Timeline::Span timeline_span{Common::Nx2Timeline::Kind::WriteGuard};
         const u32 syncpoint = static_cast<u32>(guard >> 32);
         const u32 value = static_cast<u32>(guard);
         auto& syncpoint_manager = system.Host1x().GetSyncpointManager();

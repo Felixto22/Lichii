@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "common/nx2_timeline.h"
 #include "common/alignment.h"
 #include "common/div_ceil.h"
 #include "common/dkb_frame_trace.h"
@@ -1736,6 +1737,8 @@ private:
     void PresentClientBuffer(HLERequestContext& ctx) {
         const auto* w = ctx.CommandBuffer();
         ++m_presents;
+        const Common::Nx2Timeline::Span timeline_span{Common::Nx2Timeline::Kind::Present,
+                                                      static_cast<u32>(m_presents)};
         if (Common::DkbFrameTrace::Enabled()) {
             m_vsync->trace_present.store(m_presents, std::memory_order_relaxed);
         }

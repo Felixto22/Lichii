@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_set>
 
+#include "common/nx2_timeline.h"
 #include "common/common_types.h"
 #include "video_core/gpu_split.h"
 #include "common/logging.h"
@@ -129,7 +130,10 @@ public:
         if (!enabled) {
             return;
         }
-        const u64 elapsed = Ticks() - start;
+        const u64 end = Ticks();
+        const u64 elapsed = end - start;
+        Common::Nx2Timeline::Record(Common::Nx2Timeline::Kind::Zone, start, end,
+                                    static_cast<u32>(zone));
         auto& data = t_data;
         const auto index = static_cast<size_t>(zone);
         data.exclusive_ns[index] += elapsed - data.child_ns;
@@ -221,7 +225,10 @@ inline void Add(Counter counter, u64 amount) {
 inline void AddDrain(DrainSite site, u64 start) {
     if (Enabled()) {
         const auto index = static_cast<size_t>(site);
-        t_data.drain_ns[index] += Ticks() - start;
+        const u64 end = Ticks();
+        Common::Nx2Timeline::Record(Common::Nx2Timeline::Kind::Drain, start, end,
+                                    static_cast<u32>(site));
+        t_data.drain_ns[index] += end - start;
         ++t_data.drain_count[index];
     }
 }
