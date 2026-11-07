@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "common/common_types.h"
-#include "common/logging/log.h"
+#include "common/logging.h"
 
 #if defined(ARCHITECTURE_x86_64)
 #include "dynarmic/backend/x64/perf_map.h"
