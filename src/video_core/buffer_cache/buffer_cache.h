@@ -1222,14 +1222,18 @@ void BufferCache<P>::BindHostVertexBuffers() {
             Buffer& buffer = slot_buffers[binding.buffer_id];
             TouchBuffer(buffer, binding.buffer_id);
             SynchronizeBuffer(buffer, binding.device_addr, binding.size);
+            // Every draw uses the bound range, rebound or not: an upload reordered ahead of the
+            // command buffer (CanReorderUpload) must see it. Marked only on rebinds, a range kept
+            // bound since the last usage reset took the next frame's CPU-written vertex data in
+            // the draws before the upload, and Ocarina of Time's HUD blinked.
+            const u32 offset = buffer.Offset(binding.device_addr);
+            buffer.MarkUsage(offset, binding.size);
             if (!flags[Dirty::VertexBuffer0 + index]) {
                 flush_bindings();
                 continue;
             }
             flags[Dirty::VertexBuffer0 + index] = false;
             const u32 stride = maxwell3d->regs.vertex_streams[index].stride;
-            const u32 offset = buffer.Offset(binding.device_addr);
-            buffer.MarkUsage(offset, binding.size);
             if (!bindings.buffers.empty() && index != last_index + 1) {
                 flush_bindings();
             }
@@ -1252,6 +1256,7 @@ void BufferCache<P>::BindHostVertexBuffers() {
             Buffer& buffer = slot_buffers[binding.buffer_id];
             TouchBuffer(buffer, binding.buffer_id);
             SynchronizeBuffer(buffer, binding.device_addr, binding.size);
+            buffer.MarkUsage(buffer.Offset(binding.device_addr), binding.size);
             if (!flags[Dirty::VertexBuffer0 + index]) {
                 continue;
             }
@@ -1430,6 +1435,8 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
     if constexpr (HAS_PERSISTENT_UNIFORM_BUFFER_BINDINGS) {
         needs_bind |= channel_state->uniform_buffer_binding_sizes[stage][binding_index] != size;
     }
+    // A binding kept from an earlier draw is used by this one too (see the vertex buffers).
+    buffer.MarkUsage(offset, size);
     if (!needs_bind) {
         return;
     }
