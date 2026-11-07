@@ -70,6 +70,20 @@ void ReleaseFences(DmaPusher& dma_pusher) {
         VideoCommon::DrainSite::FenceRelease);
 }
 
+// A semaphore write was just queued for the back: macro DMA reads of those bytes wait for it
+// (Maxwell3D::FrontDmaRead), other reads don't.
+void NoteSemaphoreWrite(DmaPusher& dma_pusher, GPUVAddr address) {
+    auto& split = VideoCommon::GpuSplit::Get();
+    if (!split.Active()) {
+        return;
+    }
+    if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(address)) {
+        split.NoteSmallWrite(*device, *device + 16);
+    } else {
+        split.NoteWriter();
+    }
+}
+
 } // Anonymous namespace
 
 bool Puller::PendingAcquire::Matches(u32 current) const {
@@ -255,6 +269,17 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             return;
         }
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
+        // Counters only grow: a GEQUAL value guest memory already meets stays met whatever
+        // the back still has queued, so it needs no drain (a stale copy just takes the slow way).
+        // EDEN_NX2_ACQUIRE_FAST=0 always drains first.
+        static const bool fast_check = [] {
+            const char* value = std::getenv("EDEN_NX2_ACQUIRE_FAST");
+            return value == nullptr || value[0] != '0';
+        }();
+        if (fast_check && op == GpuSemaphoreOperation::AcquireGequal &&
+            acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
+            return;
+        }
         DrainBack();
         if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
             return;
@@ -344,6 +369,18 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
         return;
     }
     // Acquires: check once after flushing pending fences; never block the GPU thread on them.
+    // The result changes nothing (the channel continues either way), so with the GPU thread
+    // split the front needn't wait for the back here: the fences are released in order on the
+    // back instead (Ocarina's front spent ~10 ms a frame in these drains).
+    // EDEN_NX2_SEM_EXECUTE_NOWAIT=0 drains and checks as before.
+    static const bool no_wait = [] {
+        const char* value = std::getenv("EDEN_NX2_SEM_EXECUTE_NOWAIT");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (no_wait && VideoCommon::GpuSplit::Get().Active()) {
+        OnBack([rasterizer = dma_pusher.rasterizer] { rasterizer->ReleaseFences(); });
+        return;
+    }
     DrainBack();
     ReleaseFences(dma_pusher);
     const u32 word = dma_pusher.memory_manager.Read<u32>(address);
@@ -396,7 +433,7 @@ void Puller::CallPullerMethod(DmaPusher& dma_pusher, const MethodCall& method_ca
         break;
     case BufferMethods::SemaphoreOperation: {
         ProcessSemaphoreTriggerMethod(dma_pusher);
-        VideoCommon::GpuSplit::Get().NoteWriter();
+        NoteSemaphoreWrite(dma_pusher, regs.semaphore_address.SemaphoreAddress());
         break;
     }
     case BufferMethods::NonStallInterrupt: {
@@ -430,7 +467,10 @@ void Puller::CallPullerMethod(DmaPusher& dma_pusher, const MethodCall& method_ca
         } else {
             ProcessSemaphoreRelease(dma_pusher);
         }
-        VideoCommon::GpuSplit::Get().NoteWriter();
+        NoteSemaphoreWrite(dma_pusher,
+                           g_nx2_ampere ? (GPUVAddr{regs.reg_array[0x18] & 0x1FFFFFF} << 32) |
+                                              (regs.reg_array[0x17] & ~3U)
+                                        : regs.semaphore_address.SemaphoreAddress());
         break;
     }
     case BufferMethods::Yield: {

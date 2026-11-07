@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <vector>
+
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -171,6 +174,26 @@ public:
         return WaitFor((std::min)(target, write_position), site);
     }
 
+    /// A small guest memory write just sent (a puller semaphore release): reads that overlap it
+    /// wait for it (WriterPositionFor) instead of for every queued writer.
+    void NoteSmallWrite(u64 begin, u64 end) {
+        if (small_writes.size() >= 64) {
+            small_writes.erase(small_writes.begin(), small_writes.begin() + 32);
+            small_writes_dropped_position = small_writes.front().position;
+        }
+        small_writes.push_back({begin, end, write_position});
+    }
+    /// The position after the last small write overlapping [begin, end), or 0.
+    [[nodiscard]] u64 SmallWritePositionFor(u64 begin, u64 end) const {
+        u64 position = small_writes_dropped_position;
+        for (const auto& write : small_writes) {
+            if (write.begin < end && begin < write.end) {
+                position = (std::max)(position, write.position);
+            }
+        }
+        return position;
+    }
+
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {
         last_writer_position = write_position;
@@ -190,6 +213,14 @@ public:
 
 private:
     friend struct GpuSplitTestAccess;
+
+    struct SmallWrite {
+        u64 begin;
+        u64 end;
+        u64 position;
+    };
+    std::vector<SmallWrite> small_writes;
+    u64 small_writes_dropped_position{};
 
     enum class Kind : u64 {
         Wrap,   ///< The rest of the ring is unused: continue at its start

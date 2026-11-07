@@ -7,12 +7,15 @@
 
 namespace VideoCommon::Nx2Perf {
 
+// Read once at startup: Verify() runs on hot paths, where a function-local static costs a
+// thread-safe initialization check on every call.
+inline const bool g_verify = [] {
+    const char* value = std::getenv("EDEN_NX2_PERF_VERIFY");
+    return value != nullptr && value[0] == '1';
+}();
+
 inline bool Verify() {
-    static const bool verify = [] {
-        const char* value = std::getenv("EDEN_NX2_PERF_VERIFY");
-        return value != nullptr && value[0] == '1';
-    }();
-    return verify;
+    return g_verify;
 }
 
 } // namespace VideoCommon::Nx2Perf

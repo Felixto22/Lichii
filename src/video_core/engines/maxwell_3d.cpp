@@ -1436,13 +1436,16 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
         // draw or dispatch: wait for everything. Other memory only changes by the writes the
         // front saw (constant buffer data, inline uploads, reports) and by other engines' work.
         bool gpu_written = false;
+        u64 target = split.LastWriterPosition();
         for (GPUVAddr page = source & ~GPUVAddr{0xfff}; page < source + read_bytes; page += 0x1000) {
             const auto device = memory_manager.GpuToCpuAddress(page);
             gpu_written |= !device || Tegra::Nx2IsGpuWritten(*device);
+            if (device) {
+                target = (std::max)(target, split.SmallWritePositionFor(*device, *device + 0x1000));
+            }
         }
         const bool gpu_page = gpu_written;
         bool waited = false;
-        u64 target = split.LastWriterPosition();
         for (const auto& write : fs.pending_writes) {
             if (write.begin < source + read_bytes && source < write.end) {
                 target = (std::max)(target, write.position);

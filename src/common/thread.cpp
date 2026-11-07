@@ -89,6 +89,7 @@ int NiceValueForPriority(Common::ThreadPriority priority) {
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <bit>
 #include <cstring>
 #include <fstream>
 #include <mutex>
@@ -548,6 +549,48 @@ void SetCurrentThreadToPerformanceCores() {
         return;
     }
     SetCurrentThreadCoreGroup(CoreGroup::Performance);
+#endif
+}
+
+void SetCurrentThreadIdealPhysicalCore(unsigned index) {
+#ifdef _WIN32
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_IDEAL_CORES");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (!enabled) {
+        return;
+    }
+    // The first logical processor of each physical core of group 0, in order.
+    static const std::vector<BYTE> cores = [] {
+        std::vector<BYTE> first;
+        DWORD length = 0;
+        GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &length);
+        std::vector<u8> buffer(length);
+        auto* info = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data());
+        if (length == 0 || !GetLogicalProcessorInformationEx(RelationProcessorCore, info, &length)) {
+            return first;
+        }
+        for (DWORD offset = 0; offset < length;) {
+            auto* entry =
+                reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + offset);
+            const auto& mask = entry->Processor.GroupMask[0];
+            if (mask.Group == 0 && mask.Mask != 0) {
+                first.push_back(static_cast<BYTE>(std::countr_zero(static_cast<u64>(mask.Mask))));
+            }
+            offset += entry->Size;
+        }
+        return first;
+    }();
+    if (cores.size() < 4 || index >= cores.size()) {
+        return;
+    }
+    PROCESSOR_NUMBER processor{};
+    processor.Group = 0;
+    processor.Number = cores[cores.size() - 1 - index];
+    SetThreadIdealProcessorEx(GetCurrentThread(), &processor, nullptr);
+#else
+    (void)index;
 #endif
 }
 
