@@ -37,11 +37,38 @@ struct Page {
     u32 value;
 };
 
+/// One bit per saved device page (36-bit device addresses), so the reader's many reads of pages
+/// without a copy skip the lock and the map.
+constexpr u64 BitmapPages = u64{1} << (36 - PageBits);
+
 struct State {
     std::mutex mutex;
     std::unordered_map<u64, std::unique_ptr<Page>> pages; ///< Keyed by device page
     std::atomic<u32> count{};
+    std::array<std::atomic<u64>, BitmapPages / 64> saved{};
 };
+
+inline void MarkSaved(State& state, u64 page, bool saved) {
+    if (page < BitmapPages) {
+        const u64 bit = u64{1} << (page % 64);
+        if (saved) {
+            state.saved[page / 64].fetch_or(bit, std::memory_order_release);
+        } else {
+            state.saved[page / 64].fetch_and(~bit, std::memory_order_release);
+        }
+    }
+}
+
+/// Whether any page of [address, address + size) may have a saved copy (without the lock).
+[[nodiscard]] inline bool MaySave(State& state, u64 address, u64 size) {
+    for (u64 page = address >> PageBits; page <= (address + size - 1) >> PageBits; ++page) {
+        if (page >= BitmapPages ||
+            ((state.saved[page / 64].load(std::memory_order_acquire) >> (page % 64)) & 1) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
 
 inline State& Get() {
     static State state;
@@ -74,6 +101,7 @@ inline void Capture(u64 device_page, const u8* page_pointer, u32 syncpoint, u32 
     if (!slot) {
         slot = std::make_unique<Page>();
         state.count.fetch_add(1, std::memory_order_release);
+        MarkSaved(state, device_page, true);
     }
     std::memcpy(slot->bytes.data(), page_pointer, PageSize);
     slot->syncpoint = syncpoint;
@@ -91,6 +119,9 @@ inline void Capture(u64 device_page, const u8* page_pointer, u32 syncpoint, u32 
         return false;
     }
     State& state = Get();
+    if (!MaySave(state, address, size)) {
+        return false;
+    }
     std::scoped_lock lk{state.mutex};
     for (u64 page = address >> PageBits; page <= (address + size - 1) >> PageBits; ++page) {
         if (state.pages.contains(page)) {
@@ -107,6 +138,9 @@ inline void Overlay(u64 address, u8* dest, u64 size) {
         return;
     }
     State& state = Get();
+    if (!MaySave(state, address, size)) {
+        return;
+    }
     std::scoped_lock lk{state.mutex};
     const u64 end = address + size;
     for (u64 page = address >> PageBits; page <= (end - 1) >> PageBits; ++page) {
@@ -128,6 +162,9 @@ inline void WriteThrough(u64 address, const u8* src, u64 size) {
         return;
     }
     State& state = Get();
+    if (!MaySave(state, address, size)) {
+        return;
+    }
     std::scoped_lock lk{state.mutex};
     const u64 end = address + size;
     for (u64 page = address >> PageBits; page <= (end - 1) >> PageBits; ++page) {
@@ -153,9 +190,18 @@ std::vector<u64> Release(IsReached&& is_reached) {
         return released;
     }
     std::scoped_lock lk{state.mutex};
+    // Pages are saved per presented frame: ask once per frame, not once per page.
+    u64 last_key = ~u64{0};
+    bool last_reached = false;
     for (auto it = state.pages.begin(); it != state.pages.end();) {
-        if (is_reached(it->second->syncpoint, it->second->value)) {
+        const u64 key = (u64{it->second->syncpoint} << 32) | it->second->value;
+        if (key != last_key) {
+            last_key = key;
+            last_reached = is_reached(it->second->syncpoint, it->second->value);
+        }
+        if (last_reached) {
             released.push_back(it->first << PageBits);
+            MarkSaved(state, it->first, false);
             it = state.pages.erase(it);
             state.count.fetch_sub(1, std::memory_order_release);
         } else {

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -12,6 +13,7 @@
 #include <boost/container/small_vector.hpp>
 
 #include "common/common_types.h"
+#include "common/logging.h"
 #include "common/container/unordered_map.h"
 #include "video_core/memory_manager.h"
 
@@ -36,6 +38,21 @@ public:
         }
         if (entries.size() > MAX_ENTRIES) {
             entries.clear();
+            ++stats.clears;
+        }
+        ++stats.queries;
+        if (stats.queries % 8192 == 0) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - stats.last_log > std::chrono::seconds(5)) {
+                // How the range cache fares (each miss walks the GPU page table for the size).
+                LOG_INFO(HW_GPU,
+                         "nx2 range cache: {} queries in 5 s, {} misses ({} same address, other "
+                         "size), {} clears, {} entries, {} pages walked",
+                         stats.queries, stats.misses, stats.size_misses, stats.clears,
+                         entries.size(), stats.pages_walked);
+                stats = {};
+                stats.last_log = now;
+            }
         }
         const size_t as_id = memory.GetID();
         const u64 key = MakeKey(as_id, gpu_addr);
@@ -44,6 +61,9 @@ public:
             it->second.gpu_addr == gpu_addr && it->second.size == size) {
             return &it->second.segments;
         }
+        ++stats.misses;
+        stats.size_misses += it != entries.end() && it->second.gpu_addr == gpu_addr;
+        stats.pages_walked += (u64{size} + 0xfff) >> 12;
         Entry entry{};
         entry.as_id = as_id;
         entry.gpu_addr = gpu_addr;
@@ -108,6 +128,15 @@ public:
     }
 
 private:
+    struct Stats {
+        u64 queries{};
+        u64 misses{};
+        u64 size_misses{};
+        u64 clears{};
+        u64 pages_walked{};
+        std::chrono::steady_clock::time_point last_log{std::chrono::steady_clock::now()};
+    } stats;
+
     struct Entry {
         VirtualSegments segments;
         size_t as_id{};
