@@ -194,6 +194,15 @@ public:
         return position;
     }
 
+    /// An inline upload to memory was just sent (KeplerMemory): it writes guest memory directly,
+    /// without the buffer cache marking the pages.
+    void NoteInlineWriter() {
+        last_inline_writer_position = write_position;
+    }
+    [[nodiscard]] u64 LastInlineWriterPosition() const {
+        return last_inline_writer_position;
+    }
+
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {
         last_writer_position = write_position;
@@ -221,6 +230,7 @@ private:
     };
     std::vector<SmallWrite> small_writes;
     u64 small_writes_dropped_position{};
+    u64 last_inline_writer_position{};
 
     enum class Kind : u64 {
         Wrap,   ///< The rest of the ring is unused: continue at its start

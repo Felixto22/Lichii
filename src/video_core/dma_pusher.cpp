@@ -478,9 +478,17 @@ void DmaPusher::CallMethod(u32 argument) {
         const auto engine_type = subchannel_type[dma_state.subchannel];
         const bool writer = split.Active() &&
                             IsMemoryWriter(*subchannel, engine_type, dma_state.method);
+        // Writes that skip the buffer cache's page marks: everything but compute dispatches.
+        const bool direct_writer =
+            writer && (engine_type != Engines::EngineTypes::KeplerCompute ||
+                       dma_state.method == KEPLER_COMPUTE_REG_INDEX(data_upload) ||
+                       dma_state.method == KEPLER_COMPUTE_REG_INDEX(exec_upload));
         SCOPE_EXIT {
             if (writer) {
                 split.NoteWriter();
+            }
+            if (direct_writer) {
+                split.NoteInlineWriter();
             }
         };
         if (split.Active()) {
@@ -536,9 +544,17 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         const auto engine_type = subchannel_type[dma_state.subchannel];
         const bool writer = split.Active() &&
                             IsMemoryWriter(*subchannel, engine_type, dma_state.method);
+        // Writes that skip the buffer cache's page marks: everything but compute dispatches.
+        const bool direct_writer =
+            writer && (engine_type != Engines::EngineTypes::KeplerCompute ||
+                       dma_state.method == KEPLER_COMPUTE_REG_INDEX(data_upload) ||
+                       dma_state.method == KEPLER_COMPUTE_REG_INDEX(exec_upload));
         SCOPE_EXIT {
             if (writer) {
                 split.NoteWriter();
+            }
+            if (direct_writer) {
+                split.NoteInlineWriter();
             }
         };
         if (split.Active()) {

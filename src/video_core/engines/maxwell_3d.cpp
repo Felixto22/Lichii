@@ -1436,7 +1436,15 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
         // draw or dispatch: wait for everything. Other memory only changes by the writes the
         // front saw (constant buffer data, inline uploads, reports) and by other engines' work.
         bool gpu_written = false;
-        u64 target = split.LastWriterPosition();
+        // Compute and copy work writes through the buffer cache, which marks the pages it
+        // writes (Nx2IsGpuWritten, a full drain below). In Ocarina none of the ~30,000 reads a
+        // second touched such a page, yet waiting for the last queued dispatch cost the front
+        // ~19 % of its time. EDEN_NX2_DMA_READ_WRITER_WAIT=1 waits for it again.
+        static const bool writer_wait = [] {
+            const char* value = std::getenv("EDEN_NX2_DMA_READ_WRITER_WAIT");
+            return value != nullptr && value[0] == '1';
+        }();
+        u64 target = writer_wait ? split.LastWriterPosition() : split.LastInlineWriterPosition();
         for (GPUVAddr page = source & ~GPUVAddr{0xfff}; page < source + read_bytes; page += 0x1000) {
             const auto device = memory_manager.GpuToCpuAddress(page);
             gpu_written |= !device || Tegra::Nx2IsGpuWritten(*device);
