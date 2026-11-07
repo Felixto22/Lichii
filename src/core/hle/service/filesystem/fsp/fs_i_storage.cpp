@@ -17,6 +17,8 @@
 #include <tuple>
 
 #include "core/file_sys/errors.h"
+#include "core/arm/debug.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/fsp/fs_i_storage.h"
 
@@ -110,6 +112,22 @@ void Nx2NoteRead(const FileSys::VirtualFile& backend, s64 offset, s64 length) {
     auto& [count, file_bytes] = window_files[name];
     ++count;
     file_bytes += static_cast<u64>(length);
+    // The guest call stack of a few reads of the most re-read file: what loads it again.
+    {
+        static std::map<std::string, u32> total_reads;
+        const u32 times = ++total_reads[name];
+        if ((times == 20 || times == 21 || times == 500 || times == 2000) && g_current_request != nullptr) {
+            Kernel::KThread& thread = g_current_request->GetThread();
+            std::string trace;
+            for (const auto& entry : Core::GetBacktrace(&thread)) {
+                trace += fmt::format("\n    {}+{:#x} ({:#x}) {}", entry.module, entry.offset,
+                                     entry.address, entry.name);
+            }
+            LOG_INFO(Service_FS, "nx2 storage read #{} of {} @{:#x} size {:#x} by guest thread {} ({}):{}",
+                     times, name, offset, length, thread.GetThreadId(),
+                     Core::GetThreadName(&thread).value_or("?"), trace);
+        }
+    }
     const auto now = std::chrono::steady_clock::now();
     if (now - last_log > std::chrono::seconds(5)) {
         std::vector<std::pair<u64, std::string>> top;

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "common/div_ceil.h"
+#include "common/scope_exit.h"
 
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/ipc_helpers.h"
@@ -436,8 +437,16 @@ void WriteOutArgument(bool is_domain, CallArguments& args, u8* raw_data, HLERequ
     }
 }
 
+/// The request a CMIF handler on this thread is serving (for diagnostics that need the client).
+inline thread_local HLERequestContext* g_current_request{};
+
 template <bool Domain, typename T, typename... A>
 void CmifReplyWrapImpl(HLERequestContext& ctx, T& t, Result (T::*f)(A...)) {
+    HLERequestContext* const previous_request = g_current_request;
+    g_current_request = &ctx;
+    SCOPE_EXIT {
+        g_current_request = previous_request;
+    };
     const auto mgr = ctx.GetManager().get();
     // Verify domain state.
     if constexpr (!Domain) {
