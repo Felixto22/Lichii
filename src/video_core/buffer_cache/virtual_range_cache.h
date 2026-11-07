@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
 #include <limits>
 #include <mutex>
@@ -47,9 +48,9 @@ public:
                 // How the range cache fares (each miss walks the GPU page table for the size).
                 LOG_INFO(HW_GPU,
                          "nx2 range cache: {} queries in 5 s, {} misses ({} same address, other "
-                         "size), {} clears, {} entries, {} pages walked",
+                         "size), {} clears, {} entries, {} pages walked, {} prefix hits",
                          stats.queries, stats.misses, stats.size_misses, stats.clears,
-                         entries.size(), stats.pages_walked);
+                         entries.size(), stats.pages_walked, stats.prefix_hits);
                 stats = {};
                 stats.last_log = now;
             }
@@ -60,6 +61,32 @@ public:
         if (it != entries.end() && it->second.as_id == as_id &&
             it->second.gpu_addr == gpu_addr && it->second.size == size) {
             return &it->second.segments;
+        }
+        // The same buffer bound with a smaller size (Ocarina binds one address with ~3000
+        // different sizes a second, each walking ~8 MiB of page table): a prefix of the larger
+        // contiguous range is contiguous too. EDEN_NX2_RANGE_PREFIX=0 walks every size.
+        static const bool prefix_hits = [] {
+            const char* value = std::getenv("EDEN_NX2_RANGE_PREFIX");
+            return value == nullptr || value[0] != '0';
+        }();
+        if (prefix_hits && it != entries.end() && it->second.as_id == as_id &&
+            it->second.gpu_addr == gpu_addr && it->second.size > size &&
+            !it->second.segments.empty()) {
+            trimmed.clear();
+            u64 left = size;
+            for (const VirtualSegment& segment : it->second.segments) {
+                if (left == 0) {
+                    break;
+                }
+                VirtualSegment part = segment;
+                part.size = static_cast<u32>((std::min<u64>)(left, segment.size));
+                trimmed.push_back(part);
+                left -= part.size;
+            }
+            if (left == 0) {
+                ++stats.prefix_hits;
+                return &trimmed;
+            }
         }
         ++stats.misses;
         stats.size_misses += it != entries.end() && it->second.gpu_addr == gpu_addr;
@@ -94,6 +121,14 @@ public:
         }
         if (!contiguous || expected != gpu_addr + size) {
             entry.segments.clear();
+        }
+        if (prefix_hits && it != entries.end() && it->second.as_id == as_id &&
+            it->second.gpu_addr == gpu_addr && it->second.size > size &&
+            it->second.segments.empty() && !entry.segments.empty()) {
+            // The larger size isn't contiguous but this one is: keep the larger miss cached
+            // and hand this result out once.
+            trimmed = std::move(entry.segments);
+            return &trimmed;
         }
         const auto result = entries.insert_or_assign(key, std::move(entry));
         return &result.first->second.segments;
@@ -134,6 +169,7 @@ private:
         u64 size_misses{};
         u64 clears{};
         u64 pages_walked{};
+        u64 prefix_hits{};
         std::chrono::steady_clock::time_point last_log{std::chrono::steady_clock::now()};
     } stats;
 
@@ -143,6 +179,7 @@ private:
         GPUVAddr gpu_addr{};
         u32 size{};
     };
+    VirtualSegments trimmed; ///< A prefix of a cached entry (valid until the next Query)
 
     struct DeferredUnmap {
         size_t as_id;
