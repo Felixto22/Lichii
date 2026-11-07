@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -1427,6 +1428,8 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
         const char* value = std::getenv("EDEN_NX2_DMA_READ_WAIT");
         return value == nullptr || value[0] != '0';
     }();
+    static u64 n_reads, n_gpu_page, n_report, n_waited, n_waited_writer, wait_ns_total, drain_ns_total;
+    static auto last_log = std::chrono::steady_clock::now();
     bool drained = true;
     if (targeted_wait && !Tegra::Nx2CmdPageDiag::g_enabled) {
         // Pages GPU work wrote (dispatch results, render targets) may change under any queued
@@ -1437,6 +1440,8 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
             const auto device = memory_manager.GpuToCpuAddress(page);
             gpu_written |= !device || Tegra::Nx2IsGpuWritten(*device);
         }
+        const bool gpu_page = gpu_written;
+        bool waited = false;
         u64 target = split.LastWriterPosition();
         for (const auto& write : fs.pending_writes) {
             if (write.begin < source + read_bytes && source < write.end) {
@@ -1444,14 +1449,41 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
                 gpu_written |= write.report;
             }
         }
+        const bool report = gpu_written && !gpu_page;
+        const bool by_writer = target == split.LastWriterPosition();
         if (!gpu_written) {
             target = (std::max)(target, fs.pending_writes_dropped_position);
-            split.WaitUntil(target, VideoCommon::DrainSite::MacroDmaRead);
+            const auto start = std::chrono::steady_clock::now();
+            waited = split.WaitUntil(target, VideoCommon::DrainSite::MacroDmaRead);
+            if (waited) {
+                wait_ns_total += static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - start).count());
+            }
             drained = false;
+        }
+        // Once every 5 s: how the reads went (which waits are left and why).
+        ++n_reads;
+        n_gpu_page += gpu_page;
+        n_report += report;
+        n_waited += waited;
+        n_waited_writer += waited && by_writer;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_log > std::chrono::seconds(5)) {
+            LOG_INFO(HW_GPU,
+                     "nx2 dma reads: {} in 5 s; full drains: gpu page {}, report {}; waited {} "
+                     "({} for another engine's write); {} ms in waits, {} ms in full drains",
+                     n_reads, n_gpu_page, n_report, n_waited, n_waited_writer,
+                     wait_ns_total / 1000000, drain_ns_total / 1000000);
+            n_reads = n_gpu_page = n_report = n_waited = n_waited_writer = 0;
+            wait_ns_total = drain_ns_total = 0;
+            last_log = now;
         }
     }
     if (drained) {
+        const auto start = std::chrono::steady_clock::now();
         split.Drain(VideoCommon::DrainSite::MacroDmaRead);
+        drain_ns_total += static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start).count());
     }
     if (VideoCommon::QueryDma::TraceEnabled()) {
         split.Run(
