@@ -36,4 +36,14 @@ inline bool PerfMapEnabled() noexcept {
 void PerfMapBlockCode(const void* start, std::uint64_t pc, const std::uint32_t* words, std::size_t count);
 void PerfMapClear();
 
+/// EDEN_NX2_BLOCK_COUNTS: one execution counter per guest instruction slot in [lo, lo + 4 *
+/// count), incremented when a block starting there runs (set by the emulator before the guest
+/// runs; blocks emitted earlier aren't counted).
+struct BlockCounters {
+    std::uint32_t* counters = nullptr;
+    std::uint64_t lo = 0;
+    std::uint64_t count = 0;
+};
+BlockCounters& GetBlockCounters() noexcept;
+
 }  // namespace Dynarmic::Backend::X64

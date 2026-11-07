@@ -108,6 +108,11 @@ void PerfMapBlockCode(const void* start, std::uint64_t pc, const std::uint32_t* 
     }
 }
 
+BlockCounters& GetBlockCounters() noexcept {
+    static BlockCounters counters;
+    return counters;
+}
+
 void PerfMapClear() {
     if (!detail::PerfMapEnabled()) {
         return;

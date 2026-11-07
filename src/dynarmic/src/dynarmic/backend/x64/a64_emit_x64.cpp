@@ -95,6 +95,14 @@ A64EmitX64::BlockDescriptor A64EmitX64::Emit(IR::Block& block) noexcept {
     const auto* const entrypoint = code.getCurr();
     code.mov(code.qword[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, abi_base_pointer)], rbp);
     code.lea(rbp, code.ptr[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, abi_base_pointer) - 8]);
+    if (const auto& block_counters = GetBlockCounters(); block_counters.counters != nullptr) {
+        const u64 pc = A64::LocationDescriptor{block.Location()}.PC();
+        if (pc >= block_counters.lo && (pc - block_counters.lo) / 4 < block_counters.count) {
+            // No guest state lives in rax or the flags at a block's entry.
+            code.mov(rax, reinterpret_cast<u64>(block_counters.counters + (pc - block_counters.lo) / 4));
+            code.inc(code.dword[rax]);
+        }
+    }
 
     DEBUG_ASSERT(block.GetCondition() == IR::Cond::AL);
     typedef void (EmitX64::*EmitHandlerFn)(EmitContext& context, IR::Inst* inst);

@@ -26,6 +26,7 @@
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_thread.h"
 #include "core/loader/nso.h"
+#include "core/nx2_block_counts.h"
 #include "core/memory.h"
 
 #ifdef HAS_NCE
@@ -327,6 +328,9 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         }
     }
     LOG_INFO(Loader, "Module {} loaded at {:#x} (size {:#x})", nso_file.GetName(), load_base, image_size);
+    if (name == "main") {
+        Core::Nx2BlockCounts::OnMainLoaded(load_base, image_size);
+    }
     process.LoadModule(system.Kernel(), std::move(codeset), load_base);
     if (name == "main" && process.GetProgramId() == Settings::MarioKartWorldProgramId) {
         process.SetMkwDynamicFpsPatchApplied(mkw_dynamic_fps_patch_applied);
