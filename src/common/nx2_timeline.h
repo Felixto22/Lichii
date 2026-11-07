@@ -38,6 +38,8 @@ enum class Kind : u16 {
     WriteGuard, ///< A guest write waits for the presented frame
     GpuWait,    ///< Host waits for the host GPU (master semaphore)
     Mark,       ///< Point event (detail: user code)
+    BackBusy,   ///< The split's back executes entries
+    FrontWait,  ///< The split's front waits for the back (detail: drain site)
 };
 
 inline u64 Tsc() {
@@ -198,8 +200,9 @@ inline void Dump(State& state) {
     if (file == nullptr) {
         return;
     }
-    static constexpr const char* kinds[] = {"zone",       "drain",   "guest_idle", "present",
-                                            "cpu_read",   "write_guard", "gpu_wait", "mark"};
+    static constexpr const char* kinds[] = {"zone",     "drain",       "guest_idle", "present",
+                                            "cpu_read", "write_guard", "gpu_wait",   "mark",
+                                            "back_busy", "front_wait"};
     std::fprintf(file, "thread,kind,detail,begin_us,end_us\n");
     const size_t count = (std::min)(state.count.load(), state.events.size());
     std::vector<std::string> names;
@@ -215,7 +218,7 @@ inline void Dump(State& state) {
         const double begin_us = static_cast<double>(event.begin - open_tsc) * ns_per_tick / 1000.0;
         const double end_us = static_cast<double>(event.end - open_tsc) * ns_per_tick / 1000.0;
         std::fprintf(file, "%s,%s,%u,%.2f,%.2f\n", names[event.thread].c_str(),
-                     kinds[(std::min)(static_cast<size_t>(event.kind), size_t{7})], event.detail,
+                     kinds[(std::min)(static_cast<size_t>(event.kind), size_t{9})], event.detail,
                      begin_us, end_us);
     }
     std::fclose(file);
