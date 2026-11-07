@@ -19,6 +19,7 @@
 
 #include "common/range_sets.inc"
 #include "common/nx2_switch.h"
+#include "core/nx2_write_snapshot.h"
 #include "video_core/buffer_cache/buffer_cache_base.h"
 #include "video_core/buffer_cache/multi_range_refresh.h"
 #include "video_core/buffer_cache/uniform_stream_reuse.h"
@@ -3024,8 +3025,9 @@ TextureBufferBinding BufferCache<P>::GetTextureBufferBinding(GPUVAddr gpu_addr, 
 template <class P>
 std::span<const u8> BufferCache<P>::ImmediateBufferWithData(DAddr device_addr, size_t size) {
     u8* const base_pointer = device_memory.GetPointer<u8>(device_addr);
-    if (IsRangeGranular(device_addr, size) ||
-        base_pointer + size == device_memory.GetPointer<u8>(device_addr + size)) {
+    if (!Core::Nx2Snapshot::Overlaps(device_addr, size) &&
+        (IsRangeGranular(device_addr, size) ||
+         base_pointer + size == device_memory.GetPointer<u8>(device_addr + size))) {
         return std::span(base_pointer, size);
     } else {
         const std::span<u8> span = ImmediateBuffer(size);

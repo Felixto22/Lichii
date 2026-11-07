@@ -25,6 +25,7 @@
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 
 #include "common/nx2_switch.h"
+#include "core/nx2_write_snapshot.h"
 #include "common/assert.h"
 #include "common/dkb_frame_trace.h"
 #include "shader_recompiler/exception.h"
@@ -1724,6 +1725,13 @@ void RasterizerVulkan::ApplyPendingCpuWrites() {
     static const bool enabled = Common::Nx2Switch("EDEN_NX2_APPLY_CPU_WRITES");
     if (enabled && gpu.HasAnyPendingCPUWrites()) {
         gpu.InvalidateGPUCache();
+    }
+    // Pages saved for a presented frame this thread has now processed: upload what the game
+    // wrote over them for the frames after it.
+    for (const u64 page : Core::Nx2Snapshot::Release([this](u32 syncpoint, u32 value) {
+             return gpu.IsGuestFenceReached(syncpoint, value);
+         })) {
+        OnCacheInvalidation(page, Core::Nx2Snapshot::PageSize);
     }
 }
 

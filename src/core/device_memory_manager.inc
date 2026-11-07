@@ -24,6 +24,7 @@
 #include "core/device_memory.h"
 #include "core/device_memory_manager.h"
 #include "core/memory.h"
+#include "core/nx2_write_snapshot.h"
 #include "video_core/nx2_perf.h"
 
 namespace Core {
@@ -464,6 +465,15 @@ void DeviceMemoryManager<Traits>::WalkBlock(DAddr addr, std::size_t size, auto o
 
 template <typename Traits>
 void DeviceMemoryManager<Traits>::ReadBlock(DAddr address, void* dest_pointer, size_t size) {
+    struct SnapshotOverlay {
+        DAddr overlay_address;
+        void* overlay_dest;
+        size_t overlay_size;
+        ~SnapshotOverlay() {
+            Core::Nx2Snapshot::Overlay(overlay_address, static_cast<u8*>(overlay_dest),
+                                       overlay_size);
+        }
+    } snapshot_overlay{address, dest_pointer, size};
     device_inter->FlushRegion(address, size);
     const std::size_t page_offset = address & Memory::YUZU_PAGEMASK;
     if (size <= Memory::YUZU_PAGESIZE - page_offset) {
@@ -508,6 +518,7 @@ void DeviceMemoryManager<Traits>::ReadBlock(DAddr address, void* dest_pointer, s
 
 template <typename Traits>
 void DeviceMemoryManager<Traits>::WriteBlock(DAddr address, const void* src_pointer, size_t size) {
+    Core::Nx2Snapshot::WriteThrough(address, static_cast<const u8*>(src_pointer), size);
     WalkBlock(
         address, size,
         [&](size_t copy_amount, DAddr current_vaddr) {
@@ -530,6 +541,15 @@ void DeviceMemoryManager<Traits>::WriteBlock(DAddr address, const void* src_poin
 
 template <typename Traits>
 void DeviceMemoryManager<Traits>::ReadBlockUnsafe(DAddr address, void* dest_pointer, size_t size) {
+    struct SnapshotOverlay {
+        DAddr overlay_address;
+        void* overlay_dest;
+        size_t overlay_size;
+        ~SnapshotOverlay() {
+            Core::Nx2Snapshot::Overlay(overlay_address, static_cast<u8*>(overlay_dest),
+                                       overlay_size);
+        }
+    } snapshot_overlay{address, dest_pointer, size};
     const std::size_t page_offset = address & Memory::YUZU_PAGEMASK;
     if (size <= Memory::YUZU_PAGESIZE - page_offset) {
         const DAddr guest_page = address & ~static_cast<DAddr>(Memory::YUZU_PAGEMASK);
@@ -574,6 +594,7 @@ void DeviceMemoryManager<Traits>::ReadBlockUnsafe(DAddr address, void* dest_poin
 template <typename Traits>
 void DeviceMemoryManager<Traits>::WriteBlockUnsafe(DAddr address, const void* src_pointer,
                                                    size_t size) {
+    Core::Nx2Snapshot::WriteThrough(address, static_cast<const u8*>(src_pointer), size);
     WalkBlock(
         address, size,
         [&](size_t copy_amount, DAddr current_vaddr) {

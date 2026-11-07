@@ -286,6 +286,20 @@ struct GPU::Impl {
         frame_guard.store(~u64{0}, std::memory_order_release);
     }
 
+    bool PendingFrameGuard(u32& syncpoint, u32& value) {
+        const u64 guard = frame_guard.load(std::memory_order_acquire);
+        if (guard == ~u64{0}) [[likely]] {
+            return false;
+        }
+        syncpoint = static_cast<u32>(guard >> 32);
+        value = static_cast<u32>(guard);
+        return !system.Host1x().GetSyncpointManager().IsReadyGuest(syncpoint, value);
+    }
+
+    bool IsGuestFenceReached(u32 syncpoint, u32 value) {
+        return system.Host1x().GetSyncpointManager().IsReadyGuest(syncpoint, value);
+    }
+
     void WaitFrameGuard() {
         u64 guard = frame_guard.load(std::memory_order_acquire);
         if (guard == ~u64{0}) [[likely]] {
@@ -588,6 +602,14 @@ void GPU::SetFrameGuard(u32 syncpoint, u32 value) {
 
 void GPU::ClearFrameGuard() {
     impl->ClearFrameGuard();
+}
+
+bool GPU::PendingFrameGuard(u32& syncpoint, u32& value) {
+    return impl->PendingFrameGuard(syncpoint, value);
+}
+
+bool GPU::IsGuestFenceReached(u32 syncpoint, u32 value) {
+    return impl->IsGuestFenceReached(syncpoint, value);
 }
 
 void GPU::WaitFrameGuard() {

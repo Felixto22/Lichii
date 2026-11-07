@@ -31,6 +31,7 @@
 #include "core/device_memory.h"
 #include "core/gpu_dirty_memory_manager.h"
 #include "core/hardware_properties.h"
+#include "core/nx2_write_snapshot.h"
 #include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/memory.h"
@@ -922,9 +923,17 @@ struct Memory::Impl {
     }
 
     void HandleRasterizerWrite(VAddr v_address, size_t size) {
-        // A guest core writing GPU-cached memory while the last presented frame may still read it.
+        // A guest core writing GPU-cached memory while the last presented frame may still read it:
+        // save the pages it writes for the GPU thread (or wait, EDEN_NX2_WRITE_SNAPSHOT=0).
+        bool snapshot{};
+        u32 snapshot_syncpoint{};
+        u32 snapshot_value{};
         if (system.GetCurrentHostThreadID() < Core::Hardware::NUM_CPU_CORES) {
-            system.GPU().WaitFrameGuard();
+            if (Core::Nx2Snapshot::Enabled()) {
+                snapshot = system.GPU().PendingFrameGuard(snapshot_syncpoint, snapshot_value);
+            } else {
+                system.GPU().WaitFrameGuard();
+            }
         }
         const auto* p = GetPointerImpl(
             v_address, []() {}, []() {});
@@ -948,6 +957,15 @@ struct Memory::Impl {
             }
         };
         gpu_device_memory->ApplyOpOnPointer(p, scratch_buffers[core], [&](DAddr address) {
+            if (snapshot && size != 0) {
+                for (DAddr page = address >> Core::Nx2Snapshot::PageBits;
+                     page <= (address + size - 1) >> Core::Nx2Snapshot::PageBits; ++page) {
+                    Core::Nx2Snapshot::Capture(
+                        page,
+                        gpu_device_memory->GetPointer<u8>(page << Core::Nx2Snapshot::PageBits),
+                        snapshot_syncpoint, snapshot_value);
+                }
+            }
             auto& current_area = rasterizer_write_areas[core];
             PAddr subaddress = address >> YUZU_PAGEBITS;
             // Performance note:

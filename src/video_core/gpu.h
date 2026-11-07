@@ -240,6 +240,9 @@ public:
     void SetFrameGuard(u32 syncpoint, u32 value);
     void ClearFrameGuard();
     void WaitFrameGuard();
+    /// The guarded frame's fence while the GPU thread has not processed it yet.
+    bool PendingFrameGuard(u32& syncpoint, u32& value);
+    bool IsGuestFenceReached(u32 syncpoint, u32 value);
 
     /// The sequence number of the last RequestComposite (0 before the first).
     [[nodiscard]] u64 LastCompositeRequest() const;

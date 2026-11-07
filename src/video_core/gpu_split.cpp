@@ -22,6 +22,7 @@
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/core.h"
+#include "core/nx2_write_snapshot.h"
 #include "video_core/engines/engine_interface.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/gpu_split.h"
@@ -409,6 +410,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
     const Common::DkbCpuTrace::Registration cpu_trace{Common::DkbCpuTrace::Role::GpuBack};
     Common::SetCurrentThreadName("GPUBack");
     on_back_thread = true;
+    Core::Nx2Snapshot::t_reader = true;
     back_running.store(true, std::memory_order_release);
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
     Common::SetCurrentThreadToPerformanceCores();
