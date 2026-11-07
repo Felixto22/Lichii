@@ -561,33 +561,55 @@ void SetCurrentThreadIdealPhysicalCore(unsigned index) {
     if (!enabled) {
         return;
     }
-    // The first logical processor of each physical core of group 0, in order.
+    // One logical processor per physical core of group 0, the cores the firmware ranks fastest
+    // first (Ryzen's preferred cores: a higher SchedulingClass), so the busiest GPU threads get
+    // the best cores and never share one.
     static const std::vector<BYTE> cores = [] {
-        std::vector<BYTE> first;
-        DWORD length = 0;
-        GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &length);
+        struct Core {
+            BYTE first;
+            BYTE scheduling_class;
+            BYTE index;
+        };
+        std::vector<Core> found;
+        ULONG length = 0;
+        GetSystemCpuSetInformation(nullptr, 0, &length, GetCurrentProcess(), 0);
         std::vector<u8> buffer(length);
-        auto* info = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data());
-        if (length == 0 || !GetLogicalProcessorInformationEx(RelationProcessorCore, info, &length)) {
-            return first;
+        if (length == 0 ||
+            !GetSystemCpuSetInformation(
+                reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(buffer.data()), length, &length,
+                GetCurrentProcess(), 0)) {
+            return std::vector<BYTE>{};
         }
-        for (DWORD offset = 0; offset < length;) {
-            auto* entry =
-                reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + offset);
-            const auto& mask = entry->Processor.GroupMask[0];
-            if (mask.Group == 0 && mask.Mask != 0) {
-                first.push_back(static_cast<BYTE>(std::countr_zero(static_cast<u64>(mask.Mask))));
+        for (ULONG offset = 0; offset < length;) {
+            const auto* entry = reinterpret_cast<const SYSTEM_CPU_SET_INFORMATION*>(buffer.data() + offset);
+            if (entry->Type == CpuSetInformation && entry->CpuSet.Group == 0) {
+                const auto& set = entry->CpuSet;
+                auto it = std::find_if(found.begin(), found.end(),
+                                       [&](const Core& core) { return core.index == set.CoreIndex; });
+                if (it == found.end()) {
+                    found.push_back({set.LogicalProcessorIndex, set.SchedulingClass, set.CoreIndex});
+                } else {
+                    it->first = (std::min)(it->first, set.LogicalProcessorIndex);
+                    it->scheduling_class = (std::max)(it->scheduling_class, set.SchedulingClass);
+                }
             }
             offset += entry->Size;
         }
-        return first;
+        std::stable_sort(found.begin(), found.end(), [](const Core& a, const Core& b) {
+            return a.scheduling_class > b.scheduling_class;
+        });
+        std::vector<BYTE> order;
+        for (const auto& core : found) {
+            order.push_back(core.first);
+        }
+        return order;
     }();
     if (cores.size() < 4 || index >= cores.size()) {
         return;
     }
     PROCESSOR_NUMBER processor{};
     processor.Group = 0;
-    processor.Number = cores[cores.size() - 1 - index];
+    processor.Number = cores[index];
     SetThreadIdealProcessorEx(GetCurrentThread(), &processor, nullptr);
 #else
     (void)index;

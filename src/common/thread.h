@@ -108,7 +108,8 @@ enum class ThreadPlacement : u32 {
 void SetCurrentThreadPriority(ThreadPriority new_priority);
 void SetCurrentThreadName(const char* name);
 void SetCurrentThreadToPerformanceCores();
-/// Windows: makes physical core `index` (counted from the last) this thread's ideal processor,
+/// Windows: makes the `index`-th fastest physical core (preferred cores first) this thread's
+/// ideal processor,
 /// so busy emulator threads don't share a core's two hardware threads. A hint the scheduler
 /// may override. EDEN_NX2_IDEAL_CORES=0 turns it off.
 void SetCurrentThreadIdealPhysicalCore(unsigned index);

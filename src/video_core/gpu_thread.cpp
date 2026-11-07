@@ -53,7 +53,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
         Common::SetCurrentThreadName("GPU");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
         Common::SetCurrentThreadToPerformanceCores();
-        Common::SetCurrentThreadIdealPhysicalCore(0);
+        Common::SetCurrentThreadIdealPhysicalCore(1);
         system.RegisterHostThread();
 
         auto current_context = context.Acquire();

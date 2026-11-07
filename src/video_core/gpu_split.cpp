@@ -419,7 +419,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
     back_running.store(true, std::memory_order_release);
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
     Common::SetCurrentThreadToPerformanceCores();
-    Common::SetCurrentThreadIdealPhysicalCore(1);
+    Common::SetCurrentThreadIdealPhysicalCore(0);
     system->RegisterHostThread();
 #ifdef _WIN32
     g_back_thread_id.store(GetCurrentThreadId(), std::memory_order_relaxed);
