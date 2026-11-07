@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <list>
 #include <memory>
+#include <thread>
 #include <utility>
 
 #include "common/assert.h"
@@ -275,6 +276,31 @@ struct GPU::Impl {
         gpu_thread.FlushAndInvalidateRegion(addr, size, is_async);
     }
 
+    void SetFrameGuard(u32 syncpoint, u32 value) {
+        frame_guard.store((u64{syncpoint} << 32) | value, std::memory_order_release);
+    }
+
+    void ClearFrameGuard() {
+        frame_guard.store(~u64{0}, std::memory_order_release);
+    }
+
+    void WaitFrameGuard() {
+        u64 guard = frame_guard.load(std::memory_order_acquire);
+        if (guard == ~u64{0}) [[likely]] {
+            return;
+        }
+        const u32 syncpoint = static_cast<u32>(guard >> 32);
+        const u32 value = static_cast<u32>(guard);
+        auto& syncpoints = system.Host1x().GetSyncpointManager();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{30};
+        while (!syncpoints.IsReadyGuest(syncpoint, value) &&
+               !shutting_down.load(std::memory_order_relaxed) &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        frame_guard.compare_exchange_strong(guard, ~u64{0}, std::memory_order_acq_rel);
+    }
+
     void NoteCompositeDone(u64 sequence) {
         {
             std::scoped_lock lk{composite_done_mutex};
@@ -406,6 +432,7 @@ struct GPU::Impl {
     std::mutex request_swap_mutex;
     u64 pending_composite_fence{};
     std::atomic<u64> composite_requested{};
+    std::atomic<u64> frame_guard{~u64{0}};
     std::mutex composite_done_mutex;
     std::condition_variable composite_done_cv;
     u64 composite_done{};
@@ -550,6 +577,18 @@ void GPU::RequestComposite(std::vector<Tegra::FramebufferConfig>&& layers,
 
 void GPU::WaitForComposite() {
     impl->WaitForComposite();
+}
+
+void GPU::SetFrameGuard(u32 syncpoint, u32 value) {
+    impl->SetFrameGuard(syncpoint, value);
+}
+
+void GPU::ClearFrameGuard() {
+    impl->ClearFrameGuard();
+}
+
+void GPU::WaitFrameGuard() {
+    impl->WaitFrameGuard();
 }
 
 u64 GPU::LastCompositeRequest() const {

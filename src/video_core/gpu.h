@@ -234,6 +234,13 @@ public:
 
     void WaitForComposite();
 
+    /// A presented frame the GPU thread may not have processed yet (its fence). Until it has, a
+    /// guest CPU write into GPU-cached memory waits for it (WaitFrameGuard): the game, told its
+    /// buffers are free at once, otherwise overwrites data the frame's draws still read.
+    void SetFrameGuard(u32 syncpoint, u32 value);
+    void ClearFrameGuard();
+    void WaitFrameGuard();
+
     /// The sequence number of the last RequestComposite (0 before the first).
     [[nodiscard]] u64 LastCompositeRequest() const;
     /// Waits until the composite with that sequence number ran on the renderer, or the timeout.

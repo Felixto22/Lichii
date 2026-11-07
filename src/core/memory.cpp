@@ -922,6 +922,10 @@ struct Memory::Impl {
     }
 
     void HandleRasterizerWrite(VAddr v_address, size_t size) {
+        // A guest core writing GPU-cached memory while the last presented frame may still read it.
+        if (system.GetCurrentHostThreadID() < Core::Hardware::NUM_CPU_CORES) {
+            system.GPU().WaitFrameGuard();
+        }
         const auto* p = GetPointerImpl(
             v_address, []() {}, []() {});
         constexpr size_t sys_core = Core::Hardware::NUM_CPU_CORES - 1;

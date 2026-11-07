@@ -1787,8 +1787,21 @@ private:
             if (gpu_behind) {
                 WaitForFrame(~w[22], w[24]);
             }
+            // Running a frame ahead: the game's next CPU writes into memory this frame's draws read
+            // wait until the GPU thread has processed the frame (Ocarina's HUD blinked otherwise).
+            // EDEN_NX2_WRITE_GUARD=0 turns it off.
+            static const bool write_guard = [] {
+                const char* value = std::getenv("EDEN_NX2_WRITE_GUARD");
+                return value == nullptr || value[0] != '0';
+            }();
+            if (write_guard && !gpu_behind && ~w[22] < 192) {
+                system.GPU().SetFrameGuard(~w[22], w[24]);
+            } else {
+                system.GPU().ClearFrameGuard();
+            }
         } else if (frames_ahead == 0) {
             WaitForFrame(~w[22], w[24]);
+            system.GPU().ClearFrameGuard();
         }
         m_previous_fence_id = ~w[22];
         m_previous_fence_value = w[24];
