@@ -4,6 +4,10 @@
 #include "core/file_sys/nup_container.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <mutex>
+#include <string>
 #include <cstddef>
 #include <cstring>
 #include <list>
@@ -718,19 +722,150 @@ VirtualFile NupContainer::OpenFile(std::size_t file_index) {
                                         node.name, cache, file_index);
 }
 
+namespace {
+
+/// A .zs member whose data doesn't start with a zstd frame (a damaged dump: Ocarina's had three
+/// textures with their first 8-12 KiB zeroed, and the game reloaded one of them nonstop, ~20
+/// times a second on two cores). Serves a sibling with the same suffix instead (e.g. another
+/// "_Nrm.bntx.zs" of the same directory), padded to this size with a zstd skippable frame.
+/// EDEN_NX2_REPAIR_ZS=0 turns it off.
+class Nx2ZstdRepairFile final : public VfsFile {
+public:
+    Nx2ZstdRepairFile(VirtualFile inner_, std::shared_ptr<std::vector<VirtualFile>> siblings_)
+        : inner(std::move(inner_)), siblings(std::move(siblings_)) {}
+
+    std::string GetName() const override {
+        return inner->GetName();
+    }
+    std::size_t GetSize() const override {
+        return inner->GetSize();
+    }
+    bool Resize(std::size_t) override {
+        return false;
+    }
+    VirtualDir GetContainingDirectory() const override {
+        return nullptr;
+    }
+    bool IsWritable() const override {
+        return false;
+    }
+    bool IsReadable() const override {
+        return true;
+    }
+    std::size_t Write(const u8*, std::size_t, std::size_t) override {
+        return 0;
+    }
+    bool Rename(std::string_view) override {
+        return false;
+    }
+
+    std::size_t Read(u8* data, std::size_t length, std::size_t offset) const override {
+        std::call_once(checked, [this] { Check(); });
+        if (replacement.empty()) {
+            return inner->Read(data, length, offset);
+        }
+        if (offset >= replacement.size()) {
+            return 0;
+        }
+        length = (std::min)(length, replacement.size() - offset);
+        std::memcpy(data, replacement.data() + offset, length);
+        return length;
+    }
+
+private:
+    static bool IsZstd(const VirtualFile& file) {
+        std::array<u8, 4> magic{};
+        return file->GetSize() >= magic.size() &&
+               file->Read(magic.data(), magic.size(), 0) == magic.size() &&
+               magic == std::array<u8, 4>{0x28, 0xb5, 0x2f, 0xfd};
+    }
+
+    void Check() const {
+        if (IsZstd(inner)) {
+            return;
+        }
+        const std::string name = inner->GetName();
+        const std::size_t size = inner->GetSize();
+        const auto underscore = name.rfind('_');
+        const std::string suffix = underscore == std::string::npos ? std::string{".zs"}
+                                                                   : name.substr(underscore);
+        VirtualFile best;
+        std::size_t best_prefix = 0;
+        for (const auto& sibling : *siblings) {
+            const std::string other = sibling->GetName();
+            const std::size_t other_size = sibling->GetSize();
+            if (other == name || !other.ends_with(suffix) || other_size > size ||
+                (other_size != size && size - other_size < 8)) {
+                continue;
+            }
+            std::size_t prefix = 0;
+            while (prefix < name.size() && prefix < other.size() && name[prefix] == other[prefix]) {
+                ++prefix;
+            }
+            if ((best == nullptr || prefix > best_prefix) && IsZstd(sibling)) {
+                best = sibling;
+                best_prefix = prefix;
+            }
+        }
+        if (best == nullptr) {
+            LOG_WARNING(Loader, "NUP member {} is damaged (no zstd frame) and has no stand-in", name);
+            return;
+        }
+        std::vector<u8> bytes(size);
+        const std::size_t used = best->Read(bytes.data(), best->GetSize(), 0);
+        if (used != best->GetSize()) {
+            return;
+        }
+        if (used < size) {
+            // A skippable frame: magic 0x184D2A50, then the size of the bytes that follow.
+            const u32 skipped = static_cast<u32>(size - used - 8);
+            const u8 header[8] = {0x50, 0x2a, 0x4d, 0x18, static_cast<u8>(skipped),
+                                  static_cast<u8>(skipped >> 8), static_cast<u8>(skipped >> 16),
+                                  static_cast<u8>(skipped >> 24)};
+            std::memcpy(bytes.data() + used, header, sizeof(header));
+        }
+        LOG_WARNING(Loader, "NUP member {} is damaged (no zstd frame): serving {} in its place",
+                    name, best->GetName());
+        replacement = std::move(bytes);
+    }
+
+    VirtualFile inner;
+    std::shared_ptr<std::vector<VirtualFile>> siblings;
+    mutable std::once_flag checked;
+    mutable std::vector<u8> replacement;
+};
+
+bool Nx2RepairZstdMembers() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_REPAIR_ZS");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
+} // namespace
+
 void NupContainer::BuildDirTree(u32 dir_index, VectorVfsDirectory& out) {
     const DirNode& node = dirs[dir_index];
     const u64 end = static_cast<u64>(node.first_child) + node.child_count;
+    auto files_here = std::make_shared<std::vector<VirtualFile>>();
     for (u64 slot = node.first_child; slot < end; ++slot) {
         const u32 child = children[slot];
         if (child >= dirs.size()) {
-            out.AddFile(OpenFile(child - static_cast<u32>(dirs.size())));
+            files_here->push_back(OpenFile(child - static_cast<u32>(dirs.size())));
         } else {
             auto sub = std::make_shared<VectorVfsDirectory>(std::vector<VirtualFile>{},
                                                             std::vector<VirtualDir>{},
                                                             dirs[child].name);
             BuildDirTree(child, *sub);
             out.AddDirectory(sub);
+        }
+    }
+    for (const auto& member : *files_here) {
+        if (member != nullptr && Nx2RepairZstdMembers() && member->GetName().ends_with(".zs")) {
+            out.AddFile(std::make_shared<Nx2ZstdRepairFile>(member, files_here));
+        } else {
+            out.AddFile(member);
         }
     }
 }
