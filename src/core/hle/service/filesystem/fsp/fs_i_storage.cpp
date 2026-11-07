@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <chrono>
 #include <map>
 #include <mutex>
@@ -80,7 +81,7 @@ std::vector<Nx2RomFsFile> Nx2ParseRomFs(const FileSys::VirtualFile& storage) {
 
 // Every 5 s: how much the game read, how much of it it had read before (a game that keeps
 // re-reading and decompressing the same data spends its CPU there), and which files.
-void Nx2NoteRead(const FileSys::VirtualFile& backend, s64 offset, s64 length) {
+void Nx2NoteRead(const FileSys::VirtualFile& backend, s64 offset, s64 length, const u8* data) {
     static std::mutex stats_mutex;
     static std::map<std::tuple<const void*, s64, s64>, u32> seen;
     static std::map<const void*, std::vector<Nx2RomFsFile>> romfs;
@@ -112,6 +113,21 @@ void Nx2NoteRead(const FileSys::VirtualFile& backend, s64 offset, s64 length) {
     auto& [count, file_bytes] = window_files[name];
     ++count;
     file_bytes += static_cast<u64>(length);
+    // A read at the start of a .zs file must begin with a zstd frame (magic 28 b5 2f fd): log the
+    // ones that don't (the game rejects the file and loads it again), once per file.
+    if (file != files.begin() && static_cast<u64>(offset) == std::prev(file)->begin &&
+        name.size() > 3 && name.ends_with(".zs") && length >= 16) {
+        static std::map<std::string, bool> checked;
+        if (auto [check, first] = checked.try_emplace(name, true); first) {
+            const bool zstd = data[0] == 0x28 && data[1] == 0xb5 && data[2] == 0x2f && data[3] == 0xfd;
+            if (!zstd || name.find("FairyFountain") != std::string::npos) {
+                LOG_INFO(Service_FS,
+                         "nx2 storage: {} starts with {:02x} (zstd frame: {}), file {:#x} bytes, read {:#x}",
+                         name, fmt::join(data, data + 16, " "), zstd,
+                         std::prev(file)->end - std::prev(file)->begin, length);
+            }
+        }
+    }
     // The guest call stack of a few reads of the most re-read file: what loads it again.
     {
         static std::map<std::string, u32> total_reads;
@@ -185,7 +201,7 @@ Result IStorage::Read(
     // Read the data from the Storage backend
     backend->Read(out_bytes.data(), length, offset);
 
-    Nx2NoteRead(backend, offset, length);
+    Nx2NoteRead(backend, offset, length, out_bytes.data());
 
     R_SUCCEED();
 }
