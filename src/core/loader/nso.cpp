@@ -27,6 +27,7 @@
 #include "core/hle/kernel/k_thread.h"
 #include "core/loader/nso.h"
 #include "core/nx2_block_counts.h"
+#include "core/nx2_nvn/nx2_nvn.h"
 #include "core/memory.h"
 
 #ifdef HAS_NCE
@@ -328,6 +329,12 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         }
     }
     LOG_INFO(Loader, "Module {} loaded at {:#x} (size {:#x})", nso_file.GetName(), load_base, image_size);
+    if (name == "sdk" && Core::Nx2Nvn::Enabled()) {
+        // (nx2) NVN directo: the sdk's NVN exports become host calls to Hookshot's NVN layer (core/nx2_nvn)
+        Core::Nx2Nvn::Attach(system);
+        Core::Nx2Nvn::PatchSdkNvnExports(codeset.memory.data() + module_start,
+                                         codeset.memory.size() - module_start);
+    }
     if (name == "main") {
         Core::Nx2BlockCounts::OnMainLoaded(load_base, image_size);
     }

@@ -1208,6 +1208,25 @@ endif()
 if (WIN32)
     target_compile_definitions(core PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 
+    # (nx2) NVN directo: Hookshot's host NVN layer (C, as Hookshot has it) and its OS layer made from Lichii's.
+    # docs/nx2/plan-nvn-directo.md
+    set(NX2_HOOKSHOT_C
+        nx2_nvn/hookshot/host/nvn_native.c
+        nx2_nvn/hookshot/host/nvn_layout.c
+        nx2_nvn/hookshot/host/rx_backend.c
+        nx2_nvn/hookshot/host/nx2_gpu_map.c
+        nx2_nvn/hookshot/host/nx2_wgr_stubs.c)
+    target_sources(core PRIVATE ${NX2_HOOKSHOT_C} nx2_nvn/nx2_hos.cpp)
+    set_source_files_properties(${NX2_HOOKSHOT_C} PROPERTIES
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/nx2_nvn/hookshot/host;${CMAKE_CURRENT_SOURCE_DIR}/nx2_nvn/hookshot/gpu/render;${CMAKE_CURRENT_SOURCE_DIR}/nx2_nvn/hookshot/gpu/vk"
+        COMPILE_DEFINITIONS "A64_WRITE_TRACK;_CRT_SECURE_NO_WARNINGS")
+    if (MSVC AND NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+        set_source_files_properties(${NX2_HOOKSHOT_C} PROPERTIES COMPILE_OPTIONS
+            "/std:c17;/w;/FI${CMAKE_CURRENT_SOURCE_DIR}/nx2_nvn/hookshot/host/nx2_c_compat.h")
+    else()
+        set_source_files_properties(${NX2_HOOKSHOT_C} PROPERTIES COMPILE_OPTIONS "-std=gnu17;-w")
+    endif()
+
     if(TARGET iw)
         target_link_libraries(core PRIVATE iw)
         message(STATUS "Linking 'core' with iw on Linux.")
