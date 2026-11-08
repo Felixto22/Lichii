@@ -198,9 +198,6 @@ void hos_vi_native_presented(void) {
 // ---- the renderer's window (display.c): its own, the replay presents there ----
 int rx_start(void* hwnd);
 void rx_resize(int width, int height);
-void hos_watch_guest_writes(const uint8_t* data, uint64_t size) {
-    (void)data, (void)size;
-}
 
 #ifdef _WIN32
 static LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {

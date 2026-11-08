@@ -93,7 +93,7 @@ if (MSVC AND NOT CXX_CLANG)
         /Zo
         /permissive-
         /EHsc
-        /std:c++20
+        $<$<COMPILE_LANGUAGE:CXX>:/std:c++20>
         /utf-8
         /volatile:iso
         /Zc:externConstexpr
