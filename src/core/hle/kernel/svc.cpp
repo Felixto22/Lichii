@@ -14,6 +14,7 @@
 #include "core/core.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/svc.h"
+#include "core/nx2_nvn/nx2_nvn.h"
 #include "core/hle/kernel/k_readable_event.h"
 #include "core/hle/service/kernel_helpers.h"
 
@@ -2501,6 +2502,11 @@ static void Call64(Core::System& system, u32 imm, std::span<uint64_t, 8> args) {
     }
 }
 void Call(Core::System& system, u32 imm) {
+    // (nx2) NVN directo: svc #(0x1000 + n) is host call n (core/nx2_nvn), made on the thread's own registers
+    if (imm >= Core::Nx2Nvn::kSvcBase && Core::Nx2Nvn::Enabled() &&
+        Core::Nx2Nvn::HostCall(system, imm - Core::Nx2Nvn::kSvcBase)) {
+        return;
+    }
     auto& kernel = system.Kernel();
     auto& process = GetCurrentProcess(kernel);
     std::array<uint64_t, 8> args;

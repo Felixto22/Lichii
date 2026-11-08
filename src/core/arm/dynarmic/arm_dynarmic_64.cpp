@@ -16,6 +16,7 @@
 #include "core/arm/dynarmic/window_trace.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/k_process.h"
+#include "core/nx2_nvn/nx2_nvn.h"
 #include "dynarmic/interface/A64/config.h"
 
 namespace Core {
@@ -325,6 +326,10 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
 
         config.fastmem_exclusive_access = config.fastmem_pointer != std::nullopt;
         config.recompile_on_exclusive_fastmem_failure = true;
+
+        // (nx2) NVN directo: every guest store marks its page for the renderer's write watch (core/nx2_nvn)
+        config.nx2_dirty_pages = Core::Nx2Nvn::DirtyPages();
+        config.nx2_dirty_page_count = Core::Nx2Nvn::DirtyPageCount();
 
         if (reinterpret_cast<u64>(m_system.DeviceMemory().buffer.BackingBasePointer() +
             Kernel::Board::Nintendo::Nx::KSystemControl::Init::GetIntendedMemorySize()) < (1ULL << 39)) {

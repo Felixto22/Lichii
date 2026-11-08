@@ -143,6 +143,10 @@ struct UserConfig {
     /// will fallback to calling the MemoryRead*/MemoryWrite* callbacks.
     std::optional<uintptr_t> fastmem_pointer = std::nullopt;
 
+    /// (nx2) see A64::UserConfig::nx2_dirty_pages (left unset for A32 guests)
+    std::uint8_t* nx2_dirty_pages = nullptr;
+    std::uint64_t nx2_dirty_page_count = 0;
+
     /// This selects other optimizations than can't otherwise be disabled by setting other
     /// configuration options. This includes:
     /// - IR optimizations

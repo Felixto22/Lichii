@@ -199,6 +199,23 @@ void AxxEmitX64::EmitMemoryWrite(AxxEmitContext& ctx, IR::Inst* inst) {
 
     const auto wrapped_fn = write_fallbacks[std::make_tuple(ordered, bitsize, vaddr.getIdx(), value_idx)];
 
+    if (conf.nx2_dirty_pages) {
+        // (nx2) mark the store's first and last pages written: the NVN-direct renderer's write watch
+        const Xbyak::Reg64 page = ctx.reg_alloc.ScratchGpr(code);
+        const Xbyak::Reg64 base = ctx.reg_alloc.ScratchGpr(code);
+        code.mov(base, reinterpret_cast<std::uintptr_t>(conf.nx2_dirty_pages));
+        code.mov(page, vaddr);
+        code.shr(page, 12);
+        code.and_(page.cvt32(), static_cast<u32>(conf.nx2_dirty_page_count - 1));
+        code.mov(code.byte[base + page], 1);
+        if constexpr (bitsize > 8) {
+            code.lea(page, code.ptr[vaddr + (bitsize / 8 - 1)]);
+            code.shr(page, 12);
+            code.and_(page.cvt32(), static_cast<u32>(conf.nx2_dirty_page_count - 1));
+            code.mov(code.byte[base + page], 1);
+        }
+    }
+
     SharedLabel abort = ctx.GenSharedLabel(), end = ctx.GenSharedLabel();
 
     if (fastmem_marker) {
@@ -434,6 +451,14 @@ void AxxEmitX64::EmitExclusiveWriteMemoryInline(AxxEmitContext& ctx, IR::Inst* i
     const Xbyak::Reg64 tmp2 = ctx.reg_alloc.ScratchGpr(code);
 
     const auto wrapped_fn = exclusive_write_fallbacks[std::make_tuple(ordered, bitsize, vaddr.getIdx(), value.getIdx())];
+
+    if (conf.nx2_dirty_pages) {   // (nx2) the store's page marked written, as EmitMemoryWrite
+        code.mov(tmp2, reinterpret_cast<std::uintptr_t>(conf.nx2_dirty_pages));
+        code.mov(tmp, vaddr);
+        code.shr(tmp, 12);
+        code.and_(tmp.cvt32(), static_cast<u32>(conf.nx2_dirty_page_count - 1));
+        code.mov(code.byte[tmp2 + tmp], 1);
+    }
 
     EmitExclusiveLock(code, conf, tmp, tmp2.cvt32());
 

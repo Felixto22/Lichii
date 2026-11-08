@@ -139,6 +139,11 @@ struct UserConfig {
     /// MemoryRead*/MemoryWrite* callbacks.
     std::optional<std::uintptr_t> fastmem_pointer = std::nullopt;
 
+    /// (nx2) A byte per 4 KiB guest page, set to 1 by every guest store (the NVN-direct renderer's write watch, as
+    /// Hookshot's lifted code marks its stores). Indexed by vaddr >> 12; nullptr: no marks.
+    std::uint8_t* nx2_dirty_pages = nullptr;
+    std::uint64_t nx2_dirty_page_count = 0;
+
     UserCallbacks* callbacks;
 
     ExclusiveMonitor* global_monitor = nullptr;
